@@ -18,6 +18,16 @@ class Vehicle():
         self.capacity = capacity
         self.current_cap = 0
         self.customers = []
+        self.speed = 2
+        
+# class VRP_Agent():
+#     def __init__(self, id):
+#         self.id = id # warehouse number
+#         self.state = np.random.rand(19,) # need some function to compute the state
+#         self.feasible_actions = None
+        
+#     def get_feasible_actions(self):
+        
 
 class Environment():
     def __init__(self, vrp=1, c2s=1):
@@ -127,10 +137,47 @@ class Environment():
     def vrp_l(self):
         pass
     
-    def _get_vrp_observation(self):
-        pass
+    def _vrp_init(self):
+        # set up one agent for each warehouse
+        for warehouse in self.state['warehouses']:
+            warehouse['vehicles'].append(Vehicle(len(warehouse['vehicles']), warehouse['location'], self.vehicle_cap))
+        # initialize the state for the vrp agent
+        self.vrp_states = np.random.rand(4, 19) # placeholder for actual calculation
+        self.vrp_actions = []
+        for i in range(4):
+            self.vrp_actions.append(self._compute_feasible_actions(i))
+        
+    def _compute_feasible_actions(self, vrp_id):
+        # find the list of vehicles and customers
+        vehicles = self.state['warehouses'][vrp_id]['vehicles']
+        customers = [customer for customer in self.state['customers'] if customer['assignment'] == vrp_id + 1]
+        # find the feasible actions
+        # check distance between each vehicle and customer
+        # check if the vehicle has enough capacity
+        # check if the customer has not been assigned to a vehicle
+        feasible_actions = []
+        for vehicle in vehicles:
+            for customer in customers:
+                if (vehicle.current_cap + customer.demand <= vehicle.capacity and customer.vehicle_id == -1
+                    and np.linalg.norm(np.array(vehicle.location) - np.array(customer.location)) / vehicle.speed
+                    <= customer.time_window[1] - self.clock):
+                    feasible_actions.append((vehicle.id, customer.id))
+        return feasible_actions
     
-    def vrp_step(self, action):
+    def _get_vrp_observation(self):
+        self.vrp_states = np.random.rand(4, 19) # placeholder for actual calculation
+        return self.vrp_states
+    
+    def vrp_step(self, action, id):
+        # here taking an action means assigning a customer to a vehicle
+        vehicle_id, customer_id = action
+        vehicle = self.state['warehouses'][id]['vehicles'][vehicle_id]
+        customer = self.state['customers'][customer_id]
+        vehicle.customers.append(customer)
+        vehicle.current_cap += customer.demand
+        customer.vehicle_id = vehicle_id
+        self.vrp_actions[id] = self._compute_feasible_actions(id)
+        return self._get_vrp_observation()
         pass
     
     def env_step(self):
