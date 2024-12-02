@@ -1,7 +1,7 @@
 import numpy as np 
 
 class Customer():
-    def __init__(self, id, T=100, arrival):
+    def __init__(self, id, arrival, T=100):
         self.id = id
         self.location = (np.random.uniform(-100, 100), np.random.uniform(-100, 100))
         self.demand = np.random.randint(1, 11)
@@ -118,8 +118,6 @@ class Environment():
             ],
             "customers": [Customer(i, arrival=0)for i in range(num_customers)],
         }
-        for customer in env_info['customers']:
-            customer['time_window'] = (customer['time_window'][0], customer['time_window'][0] + np.random.randint(self.T // 10, 2 * self.T))
 
         # init gae_embeddings
         self.gae_embeddings = np.random.rand(len(env_info['customers']), 2)
@@ -192,9 +190,12 @@ class Environment():
             order['deferred'] = 0
         if order['deferred'] > 0:
             self.orders.append(order)
-        else:
-            self.orders = self.orders[1:]
+        self.orders = self.orders[1:]
         return self._get_c2s_observation()
+    
+    def compute_c2s_reward(self, optimized_tour):
+        pass
+    
     
     def vrp_h(self):
         pass
@@ -202,19 +203,20 @@ class Environment():
     def vrp_l(self):
         pass
     
-    def vrp_init(self):
+    def vrp_init(self, customers):
         # set up one agent for each warehouse
+        # need to change this to only when there is no vehicle at the warehouse
         for warehouse in self.state['warehouses']:
             warehouse['vehicles'].append(Vehicle(len(warehouse['vehicles']), warehouse['location'], self.vehicle_cap))
 
         self.cluster_info = [{}, {}, {}, {}]
 
         for i in range(4):
-            clocs = [customer.location for customer in self.state['customers'] if customer.assignment == i + 1 and customer.cluster == None]
-            c_idx = [customer.id for customer in self.state['customers'] if customer.assignment == i + 1 and customer.cluster == None]
+            clocs = [customer.location for customer in customers if customer.assignment == i + 1 and customer.cluster == None]
+            c_idx = [customer.id for customer in customers if customer.assignment == i + 1 and customer.cluster == None]
             cluster_indices, centroids, radii, rho = self._vrp_cluster_gen(clocs, 10, self.state['warehouses'][i]['location'])
             for c in c_idx:
-                self.state['customers'][c].cluster = cluster_indices[c]
+                customers[c].cluster = cluster_indices[c]
             self.cluster_info[i]['cluster_indices'] = cluster_indices
             self.cluster_info[i]['centroids'] = centroids
             self.cluster_info[i]['radii'] = radii
@@ -281,8 +283,7 @@ class Environment():
         
         return cluster_indices, centroids, diameters/2, rho
 
-
-    def _compute_feasible_actions(self, vrp_id):
+    def compute_feasible_actions(self, vrp_id):
         # find the list of vehicles and customers
         vehicles = self.state['warehouses'][vrp_id]['vehicles']
         customers = [customer for customer in self.state['customers'] if customer['assignment'] == vrp_id + 1] # customer.vehicle_id == -1
@@ -303,8 +304,7 @@ class Environment():
     def get_vrp_observation(self):
         self.vrp_states = np.random.rand(4, 19) # placeholder for actual calculation
         return self.vrp_states
-    
-    
+      
     def vrp_step(self, action, id):
         # here taking an action means assigning a customer to a vehicle
         # store vrp state before hand for rollout and the sort
@@ -383,70 +383,73 @@ class Environment():
         # perform a state update
         return self._get_vrp_observation()
     
-    def vrp_episode(self):
-        for i in range(4): # shouldn't be here
-            self.vrp_actions[i] = self.compute_feasible_actions(i)
-            estimated_Qs = []
+    def vrp_episode(self, i):
+        self.vrp_actions[i] = self.compute_feasible_actions(i)
+        estimated_Qs = []
 
-            for action in self.vrp_actions[i]:
-                # save state and other details that change during action
-                temp_state = self.vrp_states[i]
-                vehicle_id, customer_id = action
-                temp_vehicle = self.state['warehouses'][i]['vehicles'][vehicle_id]
-                new_state = self.vrp_step(action, i)
-                estimated_Qs.append(self.vrp_l(new_state))
-                # restore the state
-                self.vrp_states[i] = temp_state
-                self.state['warehouses'][i]['vehicles'][vehicle_id] = temp_vehicle
+        for action in self.vrp_actions[i]:
+            # save state and other details that change during action
+            temp_state = self.vrp_states[i]
+            vehicle_id, customer_id = action
+            temp_vehicle = self.state['warehouses'][i]['vehicles'][vehicle_id]
+            new_state = self.vrp_step(action, i)
+            estimated_Qs.append(self.vrp_l(new_state))
+            # restore the state
+            self.vrp_states[i] = temp_state
+            self.state['warehouses'][i]['vehicles'][vehicle_id] = temp_vehicle
 
-            # pick the top k actions
-            indices = np.argsort(estimated_Qs)[-self.kappa:]
-            # store initial state before hand
-            # compute distances while doing the rollout
-            distances = [0 for _ in range(self.kappa)]
-            paths = [[] for _ in range(self.kappa)]
-            temp_init_state = self.vrp_states[i]
-            temp_vehicles = self.state['warehouses'][i]['vehicles']
+        # pick the top k actions
+        indices = np.argsort(estimated_Qs)[-self.kappa:]
+        # store initial state before hand
+        # compute distances while doing the rollout
+        distances = [0 for _ in range(self.kappa)]
+        paths = [[] for _ in range(self.kappa)]
+        temp_init_state = self.vrp_states[i]
+        temp_vehicles = self.state['warehouses'][i]['vehicles']
 
-            # peform complete rollout for each of the top k actions
-            for index in indices:
-                paths[index].append(self.vrp_actions[i][index])
-                self.vrp_step(self.vrp_actions[i][index], i)
+        # peform complete rollout for each of the top k actions
+        for index in indices:
+            paths[index].append(self.vrp_actions[i][index])
+            self.vrp_step(self.vrp_actions[i][index], i)
+            new_feasible_actions = self.compute_feasible_actions(i)
+
+            while len(new_feasible_actions) != 0:
+                estimated_Qs = []
+                for action in new_feasible_actions:
+                    temp_state = self.vrp_states[i]
+                    vehicle_id, customer_id = action
+                    temp_vehicle = self.state['warehouses'][i]['vehicles'][vehicle_id]
+                    new_state = self.vrp_step(action, i)
+                    estimated_Qs.append(self.vrp_l(new_state))
+                    self.vrp_states[i] = temp_state
+                    self.state['warehouses'][i]['vehicles'][vehicle_id] = temp_vehicle
+                best_q_index = np.argmax(estimated_Qs)
+                paths[index].append(new_feasible_actions[best_q_index])
+                self.vrp_step(new_feasible_actions[best_q_index], i)
                 new_feasible_actions = self.compute_feasible_actions(i)
-
-                while len(new_feasible_actions) != 0:
-                    estimated_Qs = []
-                    for action in new_feasible_actions:
-                        temp_state = self.vrp_states[i]
-                        vehicle_id, customer_id = action
-                        temp_vehicle = self.state['warehouses'][i]['vehicles'][vehicle_id]
-                        new_state = self.vrp_step(action, i)
-                        estimated_Qs.append(self.vrp_l(new_state))
-                        self.vrp_states[i] = temp_state
-                        self.state['warehouses'][i]['vehicles'][vehicle_id] = temp_vehicle
-                    best_q_index = np.argmax(estimated_Qs)
-                    paths[index].append(new_feasible_actions[best_q_index])
-                    self.vrp_step(new_feasible_actions[best_q_index], i)
-                    new_feasible_actions = self.compute_feasible_actions(i)
+        
+        self.vrp_states[i] = temp_init_state
+        self.state['warehouses'][i]['vehicles'] = temp_vehicles
+        
+        # need helper to compute the distance of the path
+        for j in range(self.kappa):
+            distances[j] = self.compute_distance(paths[j])
             
-            self.vrp_states[i] = temp_init_state
-            self.state['warehouses'][i]['vehicles'] = temp_vehicles
-            
-            # need helper to compute the distance of the path
-            for j in range(self.kappa):
-                distances[j] = self.compute_distance(paths[j])
+        # action with lowest distance is selected
+        index = np.argmin(distances)
+        
+        # use helper to get path in format for forward sat
+        # returns a list of tours for each vehicle 
+        optimized_tour = self.get_optimized_tour(i, paths[index]) 
+        
+        # should use optimised_sub_tour 
+        self.vrp_step(paths[index][0], i)
                 
-            
-            # action with lowest distance is selected
-            index = np.argmin(distances)
-            
-            # use helper to get path in format for forward sat
-            optimized_tour = self.get_optimized_tour(i, paths[index]) 
-            
-            self.vrp_step(paths[index][0], i)
-                
-                
-            
+        return optimized_tour
+           
+    def compute_vrp_reward(self, optimized_tour):
+        pass
+     
     
     def env_step(self):
         # execute the c2s agent
@@ -455,6 +458,34 @@ class Environment():
             if order['assignment'] == 0:
                 action = self.c2s_h()
                 self.c2s_step(action)
+        
+        # set the customers who've been deferred back to unasigned
+        for order in self.orders:
+            if order['assignment'] == 5:
+                order['assignment'] = 0
+                
+        # execute the vrp agent
+        customer_list = [customer for customer in self.state['customers'] if (customer.vehicle_id == -1 and customer.deferred == 0)]
+        
+        for i in range(4):
+            self.vrp_init(customer_list)
+            # iterate while customers are left without vehicle assignment
+            while len([customer for customer in customer_list if customer.assignment == i + 1 and customer.vehicle_id == -1]) > 0:
+                optimized_tour = self.vrp_episode(i)
+        
+        # compute reward using optimized_tour
+        c2s_reward = self.compute_c2s_reward(optimized_tour)
+        vrp_reward = self.compute_vrp_reward(optimized_tour)
+        
+        # increment environment time
+        self.env_time += 1
+        
+        # generate new customers
+        num_customers = np.random.randint(200, 301)
+        new_customers = [Customer(i, arrival=self.env_time) for i in range(num_customers)]
+        self.orders += new_customers
+        self.state['customers'] += new_customers
+        self.gae_embeddings = np.random.rand(len(self.state['customers']), 2)
         
         pass
     
