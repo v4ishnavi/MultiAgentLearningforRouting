@@ -1,7 +1,7 @@
 import numpy as np 
 
 class Customer():
-    def __init__(self, id, T=100):
+    def __init__(self, id, T=100, arrival):
         self.id = id
         self.location = (np.random.uniform(-100, 100), np.random.uniform(-100, 100))
         self.demand = np.random.randint(1, 11)
@@ -10,7 +10,8 @@ class Customer():
         self.assignment = 0 # 0:unassigned, 1-4: assigned to warehouse 1-4
         self.deferred = 0
         self.vehicle_id = -1 # -1: not assigned, >=0 assigned to vehicle
-
+        self.arrival = arrival
+        
         self.cluster = None
         self.served = False
 
@@ -104,6 +105,7 @@ class Environment():
         self.vehicle_cap = 10
         self.clock = 0
         self.kappa = 2
+        self.env_time = 0
     
     def initialize_environment(self):
         num_customers = np.random.randint(200, 301)
@@ -114,7 +116,7 @@ class Environment():
                 {"location": (-50, -50), "inventory": self.P_0max, "vehicles": []},
                 {"location": (-50, 50), "inventory": self.P_0max, "vehicles": []},
             ],
-            "customers": [Customer(i)for i in range(num_customers)],
+            "customers": [Customer(i, arrival=0)for i in range(num_customers)],
         }
         for customer in env_info['customers']:
             customer['time_window'] = (customer['time_window'][0], customer['time_window'][0] + np.random.randint(self.T // 10, 2 * self.T))
@@ -447,6 +449,13 @@ class Environment():
             
     
     def env_step(self):
+        # execute the c2s agent
+        # iterate through the list of unassigned customers and use c2s to decide the assignment
+        for order in self.orders:
+            if order['assignment'] == 0:
+                action = self.c2s_h()
+                self.c2s_step(action)
+        
         pass
     
     def Euclidean_CC(self, i, j):
