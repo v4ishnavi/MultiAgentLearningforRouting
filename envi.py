@@ -12,6 +12,7 @@ class Customer():
         self.vehicle_id = -1 # -1: not assigned, >=0 assigned to vehicle
 
         self.cluster = None
+        self.served = False
 
 class Vehicle():
     def __init__(self, id, location, capacity):
@@ -215,6 +216,7 @@ class Environment():
             self.cluster_info[i]['cluster_indices'] = cluster_indices
             self.cluster_info[i]['centroids'] = centroids
             self.cluster_info[i]['radii'] = radii
+            self.cluster_info[i]['rho'] = rho
 
 
         # initialize the state for the vrp agent
@@ -308,12 +310,73 @@ class Environment():
         vehicle_id, customer_id = action
         vehicle = self.state['warehouses'][id]['vehicles'][vehicle_id]
         customer = self.state['customers'][customer_id]
+
+        # generate 17 length action vector
+        step = np.zeros(17)
+        # d = np.linalg.norm(np.array(customer.location) - np.array(vehicle.location)) # distance from loc to c
+        d = self.Euclidean_CV(customer_id, id, vehicle_id)
+        b_d_short = (d < customer.radius) # is d < neighborhood radius
+        t = np.linalg.norm(np.array(customer.location) - np.array(vehicle.location))/vehicle.speed # time taken to travel to c
+
+        b_t_short = (t <= customer.time_window[1] - vehicle.time) # - clock (current time) # is t < time window start
+        ngb = np.linalg.norm(vehicle.location - self.cluster_info[id]['centroids'][customer.cluster]) < self.cluster_info[id]['radii'][customer.cluster] # distance from vehicle to cluster centroid
+
+        # THIS CUSTOMER_LIST IF WRONG
+        customer_list = [customer.id for customer in self.state['customers'] if customer.assignment == id + 1] # filter out previous time steps
+        c_left = False
+        if ngb:
+            non_d = np.inf # distance from c to nearest non-member
+            for cidx in customer_list:
+                cu = self.state['customers'][cidx]
+                if cu.cluster != customer.cluster:
+                    # non_d = min(non_d, np.linalg.norm(np.array(cu.location) - np.array(vehicle.location)))
+                    non_d = min(non_d, self.Euclidean_CV(cu.id, id, vehicle_id))
+        else:
+            non_d = np.inf
+            for cidx in customer_list:
+                cu = self.state['customers'][cidx]
+                if cu.cluster == customer.cluster and cu.vehicle_id == -1:
+                    c_left = True
+                    break
+            
+        drop_far = False
+        drop_cls = True
+        if c_left:
+            for cidx in customer_list:
+                cu = self.state['customers'][cidx]
+
+                if cu.vehicle_id == -1 and not drop_far:
+                    if np.linalg.norm(np.array(cu.location) - 
+                                      np.array(self.state['warehouses'][id]['location'])) > self.Euclidean_CV(
+                                      cidx, id, vehicle_id):
+                        drop_far = True
+
+                if cu.vehicle_id == -1 and drop_cls:
+                    if self.Euclidean_CV(cu.id, id, vehicle_id) < self.cluster_info[id]['rho'][cu.cluster]:
+                        drop_cls = False
+
+                if drop_far and not drop_cls:
+                    break
+
+
+        # drop_long = do something
+
+        served = len(vehicle.customers) # what if a customer's time window was missed? are they still counted as served?
+        # cls_dem = (vehicle.capacity - vehicle.current_cap < remaining sum of demands of cluster)
+        # hops = time window-wise?
+        # cls_tim = define feasible
+        # urgt = again, what is the current time for the vehicle?
+        # dfrac = time being used to seve c (what is this) / (vehicle.curent_cap/vehicle.capacity)
+        # remote = what is this?
+
+
+        # update vehicle instance
         vehicle.customers.append(customer)
         vehicle.current_cap += customer.demand
         customer.vehicle_id = vehicle_id
-        # need to update vehicle location to customer location
         vehicle.location = customer.location
         # maybe dont do this here and do it explicitly when needed 
+
         # self.vrp_actions[id] = self._compute_feasible_actions(id)
         # perform a state update
         return self._get_vrp_observation()
