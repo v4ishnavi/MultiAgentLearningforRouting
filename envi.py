@@ -651,14 +651,14 @@ class Environment():
         # execute the c2s agent
         # iterate through the list of unassigned customers and use c2s to decide the assignment
 
-        c2s_tuples = {}
+        c2s_tuples = []
         for order in self.orders:
             state = self.get_c2s_observation()
             id = order['id']
             if order['assignment'] == 0:
                 action = self.c2s_l()
                 self.c2s_step(action)
-                c2s_tuples[id] = (state, action, id)
+                c2s_tuples.append((state, action, id))
 
 
         # execute the vrp agent
@@ -673,8 +673,10 @@ class Environment():
 
         # compute reward using optimized_tour
         c2s_reward = self.compute_c2s_reward(optimized_tour)
-        for id, t in c2s_tuples.items():
-            c2s_reward[id] = (t[0], t[1], c2s_reward[id])
+        c2s_return = []
+        for c in c2s_tuples:
+            rew = c2s_reward[c[2]]
+            c2s_return.append((c[0], c[1], rew))
         vrp_reward = self.compute_vrp_reward(optimized_tour)
         
         # increment environment time
@@ -692,7 +694,7 @@ class Environment():
         self.state['customers'] += new_customers
         self.gae_embeddings = np.random.rand(len(self.state['customers']), 2)
         
-        return c2s_reward, vrp_reward
+        return c2s_return, vrp_reward
 
     def compute_distance(self, i, path):
         distance = np.linalg.norm(np.array(self.state['warehouses'][i]['location']) - np.array(self.state['customers'][path[0][1]].location))
