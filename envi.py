@@ -84,9 +84,15 @@ class Environment():
         customer_features = torch.tensor(clocs, dtype=torch.float)
         # Compute embeddings using the GAE model
         with torch.no_grad():
-            self.gae_embeddings = self.gae_model.encode(customer_features, customer_edges).cpu().numpy()
+            self.gae_temp = self.gae_model.encode(customer_features, customer_edges).cpu().numpy()
+        self.gae_embeddings = {}
+        for embedding, customer in zip(self.gae_temp, env_info['customers']):
+            self.gae_embeddings[customer.id] = embedding    
+        # self.gae_embeddings = self.gae_model.encode(customer_features, customer_edges).cpu().numpy()
         self.orders = [env_info['customers'][i].id for i in range(len(env_info['customers']))] 
-        
+        # print("ENV init")
+        # print(self.orders)
+        # print(num_customers)
         return env_info
     
     def _generate_edges(self, clocs, wlocs, n):
@@ -176,6 +182,7 @@ class Environment():
         observation.append(self.gae_embeddings[customers_id][1])
         # compute the distance between the customer and the warehouse(not saving any time by doing this earlier)
         # append quantinty of the product at each warehouse
+        # print(customers_id)
         for warehouse in self.state["warehouses"]:
             observation.append(np.linalg.norm(warehouse['location'] -self.state["customers"][customers_id].location))
             observation.append(warehouse['inventory'])
@@ -256,8 +263,8 @@ class Environment():
 
 
 
-    def vrp_h(self, id, customers):
-        customers = [customer for customer in customers if customer.assignment == id] #!change dict to class not
+    def vrp_h(self, id, customer_ids):
+        customers = [self.state['customers'][c] for c in customer_ids if self.state['customers'][c].assignment == id] #!change dict to class not
 
         # Sort the assigned customers at the warehouse according to their time window opening.
         customers = sorted(customers, key=lambda x: x.time_window[0])
@@ -279,7 +286,7 @@ class Environment():
                         added = True
                         vehicle.available = max(c.time_window[0], self.env_time + time) + self.service_time
                     
-                    elif vehicle.customers != [] and time + vehicle.time <= c.time_window[1] and time + vehicle.time >= c.time_window[0]:
+                    elif vehicle.customers != [] and time + vehicle.available <= c.time_window[1] and time + vehicle.available >= c.time_window[0]:
                         added = True
                         vehicle.available += time + self.service_time
 
@@ -292,6 +299,7 @@ class Environment():
                         served[customers.index(c)] = True
                         added = True
                         self.state['warehouses'][id]['vehicles'][v_idx] = vehicle
+                        self.state['customers'][c.id].vehicle_id = vehicle.id
                         break
 
 
@@ -313,7 +321,7 @@ class Environment():
         self.dqn_vrp.eval()
         return self.dqn_vrp(state)
 
-    def vrp_init(self, customers):
+    def vrp_init(self, customer_ids):
         # set up one agent for each warehouse
         # need to change this to only when there is no vehicle at the warehouse
         for warehouse in self.state['warehouses']:
@@ -321,29 +329,29 @@ class Environment():
 
         self.cluster_info = [{}, {}, {}, {}]
 
-        for c in customers:
-            if c.vehicle_id == -1 and c.assignment != 4:
-                c.arrival = self.env_time
+        for c in customer_ids:
+            cu = self.state['customers'][c]
+            if cu.vehicle_id == -1 and cu.assignment != 4:
+                self.state['customers'][c].arrival = self.env_time
 
         for i in range(4):
-            clocs = [customer.location for customer in customers if customer.assignment == i and customer.cluster == None]
-            c_idx = [customer.id for customer in customers if customer.assignment == i and customer.cluster == None] 
-            #!change : gptprev asking to store customers in cidx??
-            cluster_indices, centroids, radii, rho = self._vrp_cluster_gen(clocs, self.cluster_n, self.state['warehouses'][i]['location'])
+            clocs = [self.state['customers'][c].location for c in customer_ids if self.state['customers'][c].assignment == i and self.state['customers'][c].cluster == None]
+            c_idx = [self.state['customers'][c].id for c in customer_ids if self.state['customers'][c].assignment == i and self.state['customers'][c].cluster == None] 
+
+            cluster_indices, centroids, radii, rho = self._vrp_cluster_gen(c_idx, clocs, self.cluster_n, self.state['warehouses'][i]['location'])
             for c in c_idx:
-                customers[c].cluster = cluster_indices[c]
+                self.state['customers'][c].cluster = cluster_indices[c]
             self.cluster_info[i]['cluster_indices'] = cluster_indices
             self.cluster_info[i]['centroids'] = centroids
             self.cluster_info[i]['radii'] = radii
             self.cluster_info[i]['rho'] = rho
 
-        self.state['customers'] = customers
 
         # initialize the state for the vrp agent
-        self.vrp_states = None # placeholder for actual calculation
+        self.vrp_states = [None for _ in range(4)] # placeholder for actual calculation
         self.vrp_actions = [[] for _ in range(4)]
 
-    def _vrp_cluster_gen(self, clocs, n, depot):
+    def _vrp_cluster_gen(self, c_ids, clocs, n, depot):
         # generate distance matrix
         # clocs = [customer.location for customer in self.state['customers'] if customer.assignment == w + 1] # and customer.cluster == None
         ccount = len(clocs)
@@ -386,10 +394,15 @@ class Environment():
         rho = np.max(radii)
 
         # generate cluster indices for each customer
-        cluster_indices = np.zeros(ccount, dtype=int)
+        # cluster_indices = np.zeros(ccount, dtype=int)
+        # for i, c in enumerate(clusters):
+        #     for j in c:
+        #         cluster_indices[j] = i
+        cluster_indices = {}
         for i, c in enumerate(clusters):
             for j in c:
-                cluster_indices[j] = i
+                c_id = c_ids[j]
+                cluster_indices[c_id] = i
 
         # cluster centroids
         centroids = [np.mean(np.array([clocs[ci] for ci in c]), axis=0) for c in clusters]
@@ -428,13 +441,13 @@ class Environment():
         # generate 17 length action vector
 
         d = self.Euclidean_CV(customer_id, id, vehicle_id)
-        b_d_short = (d < customer.radius) # is d < neighborhood radius
+        b_d_short = (d < self.cluster_info[id]['rho']) # is d < neighborhood radius
         t = self.Euclidean_CV(customer_id, id, vehicle_id) / vehicle.speed # time taken to travel to c
 
         b_t_short = (t + vehicle.available <= customer.time_window[1]) # is t < time window end
         ngb = np.linalg.norm(vehicle.location - self.cluster_info[id]['centroids'][customer.cluster]) < self.cluster_info[id]['radii'][customer.cluster] # distance from vehicle to cluster centroid
 
-        customer_list = [customer.id for customer in self.state['customers'] if customer.assignment == id + 1 and customer.arrival == self.env_time] # filter out previous time steps
+        customer_list = [customer.id for customer in self.state['customers'] if customer.assignment == id and customer.arrival == self.env_time] # filter out previous time steps
 
         c_left = False
         non_d = np.inf # distance from c to nearest non-member
@@ -471,7 +484,7 @@ class Environment():
                         drop_far = True
 
                 if cu.vehicle_id == -1 and drop_cls:
-                    if self.Euclidean_CV(cu.id, id, vehicle_id) < self.cluster_info[id]['rho'][cu.cluster]:
+                    if self.Euclidean_CV(cu.id, id, vehicle_id) < self.cluster_info[id]['rho']:
                         drop_cls = False
 
                 if drop_far and not drop_cls:
@@ -518,7 +531,7 @@ class Environment():
         urgt = customer.time_window[1] - (vehicle.available + t)
 
         dfrac = (t + self.service_time) / (vehicle.current_cap + customer.demand/vehicle.capacity)
-        remote = np.linalg.norm(customer.location -self.cluster_info[id]['centroids'][customer.cluster])/self.cluster_info[id]['radii'][customer.cluster]
+        remote = np.linalg.norm(customer.location -self.cluster_info[id]['centroids'][customer.cluster])/max(1,self.cluster_info[id]['radii'][customer.cluster])
 
         c_members_num = len([c for c in customer_list if self.state['customers'][c].cluster == customer.cluster])
         step = np.array([d/282.84, b_d_short, t/(282.84/vehicle.speed), b_t_short, ngb, non_d/282.84, c_left, drop_far, drop_cls, drop_long, served/vehicle.capacity, cls_dem, hops/c_members_num, cls_tim, urgt/(self.T/2), dfrac, remote], dtype=np.float32)
@@ -653,9 +666,9 @@ class Environment():
 
             # reinitialise vehicle
             self.state['warehouses'][id]['vehicles'][vehicle_id].location = self.state['warehouses'][id]['location']
-            self.state['warehouses'][vehicle_id]['vehicles'][vehicle_id].current_cap = 0
-            self.state['warehouses'][vehicle_id]['vehicles'][vehicle_id].customers = []
-            self.state['warehouses'][vehicle_id]['vehicles'][vehicle_id].available = self.env_time
+            self.state['warehouses'][id]['vehicles'][vehicle_id].current_cap = 0
+            self.state['warehouses'][id]['vehicles'][vehicle_id].customers = []
+            self.state['warehouses'][id]['vehicles'][vehicle_id].available = self.env_time
 
             c_list = [self.state['customers'][c_id] for c_id in tours[vehicle_id]]
 
@@ -665,11 +678,11 @@ class Environment():
             prev_loc = self.state['warehouses'][id]['location']
             for c in c_list:
                 d_p.append(np.linalg.norm(prev_loc - c.location))
-                t_p.append(d_p / self.state['warehouses'][id]['vehicles'][vehicle_id].speed)
+                t_p.append(d_p[-1] / self.state['warehouses'][id]['vehicles'][vehicle_id].speed)
                 prev_loc = c.location
             # return to the warehouse
-            d_p.append(np.linalg.norm(prev_loc - self.state['warehouses'][vehicle_id]['location']))
-            t_p.append(d_p / self.state['warehouses'][id]['vehicles'][vehicle_id].speed)
+            d_p.append(np.linalg.norm(prev_loc - self.state['warehouses'][id]['location']))
+            t_p.append(d_p[-1] / self.state['warehouses'][id]['vehicles'][vehicle_id].speed)
             d_max = max(d_p)
             t_max = max(t_p)
             rho = self.cluster_info[id]['rho']
@@ -691,6 +704,10 @@ class Environment():
         # iterate through the list of unassigned customers and use c2s to decide the assignment
 
         c2s_tuples = []
+        # print(len(self.state['customers']))
+        # print(self.env_time)
+        # print(self.orders)
+        
         for order in self.orders.copy():
             state = self.get_c2s_observation()
             id = order #!change 
@@ -704,12 +721,14 @@ class Environment():
 
 
         # execute the vrp agent
-        customer_list = [customer for customer in self.state['customers'] if (customer.vehicle_id == -1 and customer.assignment != 4)]
+        customer_list = [customer.id for customer in self.state['customers'] if (customer.vehicle_id == -1 and customer.assignment != 4)]
+        self.vrp_init(customer_list)
+        # print([len(self.cluster_info[i]['centroids']) for i in range(4)])
 
         c2s_return = []
         vrp_return = []
         for i in range(4):
-            self.vrp_init(customer_list)
+            # print(i, len(customer_list), len(self.state['customers']))
             # iterate while customers are left without vehicle assignment
             if self.vrp == 1:
                 while len([customer for customer in customer_list if (customer.assignment == i and customer.vehicle_id == -1)]) > 0:
@@ -717,14 +736,16 @@ class Environment():
                 final_tour = self.get_current_tour(i)
                 optimized_tour = self.optimise_tour(i, final_tour)
             else:
-                optimized_tour = self.vrp_h(i, customer_list)
+                _ = self.vrp_h(i, customer_list)
+                optimized_tour = self.get_current_tour(i)
 
             # compute reward using optimized_tour
-            c2s_reward = self.compute_c2s_reward(optimized_tour)
+            c2s_reward = self.compute_c2s_reward(optimized_tour, i)
             for c in c2s_tuples:
-                rew = c2s_reward[c[2]]
-                c2s_return.append((c[0], c[1], rew))
-            vrp_reward = self.compute_vrp_reward(optimized_tour)
+                if self.state['customers'][c[2]].assignment == i:
+                    rew = c2s_reward[c[2]]
+                    c2s_return.append((c[0], c[1], rew))
+            vrp_reward = self.compute_vrp_reward(optimized_tour, i)
             vrp_return.append(vrp_reward)
 
         # EPISODE DONE. UPDATE ENVIRONMENT
@@ -734,14 +755,14 @@ class Environment():
 
         # set the customers who've been deferred back to unasigned
         for order in self.orders:
-            if order.assignment == 4:
-                order.assignment = -1
+            if self.state['customers'][order].assignment == 4:
+                self.state['customers'][order].assignment = -1
         
         # generate new customers
         num_customers = np.random.randint(200, 300)
         new_customers = []
-        for i in new_customers:
-            new = Customer(len(self.state['customers']) + i, arrival=self.env_time)
+        for i in range(num_customers):
+            new = Customer(len(self.state['customers']), arrival=self.env_time)
             self.state['customers'].append(new)
             new_customers.append(new.id)
 
@@ -759,9 +780,14 @@ class Environment():
 
         customer_features = torch.tensor(clocs, dtype=torch.float)
         with torch.no_grad():
-            self.gae_embeddings = self.gae_model.encode(customer_features, customer_edges).cpu().numpy()
+            gae_embeddings_new = self.gae_model.encode(customer_features, customer_edges).cpu().numpy()
+        # make all old embedding None
+        self.gae_embeddings = {}
+        for i in range(len(gae_embeddings_new)):
+            self.gae_embeddings[current_customers[i].id] = gae_embeddings_new[i]
         
-        return c2s_return, vrp_reward
+        print('Time step done')
+        return c2s_return, vrp_return
 
 
     def compute_distance(self, i, path):

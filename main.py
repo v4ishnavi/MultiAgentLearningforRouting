@@ -1,5 +1,5 @@
 from envi import Environment, Customer, Vehicle
-from DQN import DQN_c2s, ReplayBuffer, DQN_vrp
+from DQN import DQN_c2s, ReplayBuffer, ReplayBuffer_vrp, DQN_vrp
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -44,7 +44,7 @@ loss_fn = nn.MSELoss()
 replay_buffer_c2s = ReplayBuffer(C2S_BUFFER_CAPACITY)
 
 optimizer_vrp = optim.Adam(dqn_vrp.parameters(), lr=C2S_LEARNING_RATE)
-replay_buffer_vrp = ReplayBuffer(VRP_BUFFER_CAPACITY)
+replay_buffer_vrp = ReplayBuffer_vrp(VRP_BUFFER_CAPACITY)
 
 c2s_flag = 0
 vrp_flag = 0
@@ -52,6 +52,7 @@ vrp_flag = 0
 # Training loop for DQN with delayed rewards
 epsilon = VRP_EPSILON_START  # Initial exploration rate
 for episode in range(EPISODES):
+    print(f"Episode {episode+1}")
     # Reset the environment
     # Create an environment
     vrp_episode_loss = 0
@@ -65,8 +66,8 @@ for episode in range(EPISODES):
         env = Environment(0, 0)
 
     # T = 0
-    env.initialize_environment()
-    c2s_rewards, vrp_rewards = env.env_step(epsilon) 
+    for time_step in range(5):
+        c2s_rewards, vrp_rewards = env.env_step(epsilon) 
 
     # while not done:
     #     # Epsilon-greedy policy
@@ -88,7 +89,6 @@ for episode in range(EPISODES):
     #         rewards_batch = [rewards] * len(states_batch)
     #         done = True  # End the batch
 
-    for time_step in range(5):
         # Add experiences to replay buffer
         for i in range(len(c2s_rewards) -1):
             replay_buffer_c2s.add(c2s_rewards[i][0], c2s_rewards[i][1], c2s_rewards[i][2], c2s_rewards[i+1][0], False)
@@ -96,7 +96,9 @@ for episode in range(EPISODES):
 
         for agent in vrp_rewards:
             for vehicle in agent:
+                # print(vehicle)
                 for i in range(len(vehicle)):
+                    # print(vehicle[i])
                     replay_buffer_vrp.add(vehicle[i][0], vehicle[i][2])
                     # state, reward
         
