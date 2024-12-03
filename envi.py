@@ -1,4 +1,6 @@
 import numpy as np 
+import random
+import torch
 
 class Customer():
     def __init__(self, id, arrival, T=100, SAT=False):
@@ -29,9 +31,11 @@ class Vehicle():
 
 
 class Environment():
-    def __init__(self, vrp=1, c2s=1):
+    def __init__(self, vrp=1, c2s=1, dqn_c2s=None, dqn_vrp=None):
         self.vrp = vrp
         self.c2s = c2s
+        self.dqn_c2s = dqn_c2s
+        self.dqn_vrp = dqn_vrp
         self.state = self._initialize_environment()
         self.orders = []
         self.tau = 1000
@@ -84,9 +88,15 @@ class Environment():
                 action = len(self.state['warehouses']) + 1
         return action
     
-    def c2s_l(self):
+    def c2s_l(self, epsilon):
         # dqn returns the action to be taken
-        pass
+        if random.random() < epsilon:
+            action = random.randint(1, 6)  # Random action
+        else:
+            with torch.no_grad():
+                q_values = self.dqn_c2s(torch.FloatTensor(self.get_c2s_observation()))
+                action = torch.argmax(q_values).item()  # Greedy action
+        return action
         
     def get_c2s_observation(self):
         # The state for the c2s agent is the 19 state table in the paper
@@ -589,15 +599,21 @@ class Environment():
     def env_step(self):
         # execute the c2s agent
         # iterate through the list of unassigned customers and use c2s to decide the assignment
+
+        c2s_tuples = {}
         for order in self.orders:
+            state = self.get_c2s_observation()
+            id = order['id']
             if order['assignment'] == 0:
-                action = self.c2s_h()
+                action = self.c2s_l()
                 self.c2s_step(action)
+                c2s_tuples[id] = (state, action, id)
 
 
         # execute the vrp agent
         customer_list = [customer for customer in self.state['customers'] if (customer.vehicle_id == -1 and customer.deferred != 5)]
-
+        vrp_states = []
+        vrp_actions = []
         for i in range(4):
             self.vrp_init(customer_list)
             # iterate while customers are left without vehicle assignment
@@ -606,6 +622,8 @@ class Environment():
 
         # compute reward using optimized_tour
         c2s_reward = self.compute_c2s_reward(optimized_tour)
+        for id, t in c2s_tuples.items():
+            c2s_reward[id] = (t[0], t[1], c2s_reward[id])
         vrp_reward = self.compute_vrp_reward(optimized_tour)
         
         # increment environment time
@@ -623,7 +641,7 @@ class Environment():
         self.state['customers'] += new_customers
         self.gae_embeddings = np.random.rand(len(self.state['customers']), 2)
         
-        pass
+        return c2s_reward, vrp_reward
 
     def compute_distance(self, i, path):
         distance = np.linalg.norm(np.array(self.state['warehouses'][i]['location']) - np.array(self.state['customers'][path[0][1]].location))
