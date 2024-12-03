@@ -760,12 +760,15 @@ class Environment():
             for c in c2s_tuples:
                 if self.state['customers'][c[2]].assignment == i:
                     if self.vrp == 0 and c[2] in unserved:
-                        rew = -10 * (self.gamma**self.state['customers'][c[2]].deferred)
+                        rew_c2s = -10 * (self.gamma**self.state['customers'][c[2]].deferred)
+                        li_c2s = 0
+                        di_c2s = 0
+                        ui_c2s = 0
                     else:
                         rew_c2s = c2s_reward[c[2]]
-                    li_c2s = Li[c[2]]
-                    di_c2s = Di[c[2]]
-                    ui_c2s = Ui[c[2]]
+                        li_c2s = Li[c[2]]
+                        di_c2s = Di[c[2]]
+                        ui_c2s = Ui[c[2]]
 
                     c2s_return.append((c[0], c[1], rew_c2s, li_c2s, di_c2s, ui_c2s))
             vrp_reward = self.compute_vrp_reward(optimized_tour, i)

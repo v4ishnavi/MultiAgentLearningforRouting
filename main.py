@@ -28,7 +28,7 @@ VRP_EPSILON_START = 1.0  # Initial exploration rate
 VRP_EPSILON_DECAY = 0.999  # Decay rate of exploration rate
 VRP_TARGET_UPDATE = 4  # Frequency of target network updates
 
-EPISODES = 1000  # Number of training episodes
+EPISODES = 4  # Number of training episodes
 
 # Initialize models, optimizer, and replay buffer
 dqn_c2s = DQN_c2s(C2S_STATE_DIM, C2S_ACTION_DIM)
