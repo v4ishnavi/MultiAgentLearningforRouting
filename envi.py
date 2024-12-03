@@ -149,7 +149,7 @@ class Environment():
                 tours[vehicle_id] = []
             tours[vehicle_id].append(customer_id)
 
-        rewards = []
+        rewards = {}
         for vehicle_id, _ in tours.items():
             c_list = [self.state['customers'][c_id] for c_id in tours[vehicle_id]]
             # compute tour distance for L
@@ -182,7 +182,7 @@ class Environment():
                 r_c = (-1*(D[i] + L)) + F[i] - U
                 if F[i] == 0: r_c -= 10
                 r_c = r_c * (self.gamma**c.deferred)
-                rewards.append((c.id, r_c))
+                rewards[c.id] = r_c
 
         return rewards
 
