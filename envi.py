@@ -474,6 +474,7 @@ class Environment():
         vehicle.current_cap += customer.demand
         customer.vehicle_id = vehicle_id
         vehicle.location = customer.location
+        self.state['warehouses'][id]['vehicles'][vehicle_id] = vehicle
         # maybe dont do this here and do it explicitly when needed 
 
         # perform a state update
@@ -556,6 +557,46 @@ class Environment():
         return optimized_tour
 
 
+    # def compute_vrp_reward(self, optimized_tour, id):
+    #     # organise into sub-tours
+    #     tours = {}
+    #     for action in optimized_tour:
+    #         vehicle_id, customer_id = action
+    #         if vehicle_id not in tours:
+    #             tours[vehicle_id] = []
+    #         tours[vehicle_id].append(customer_id)
+
+    #     # compute the reward for each sub-tour
+    #     rewards = []
+    #     for vehicle_id, _ in tours.items():
+    #         c_list = [self.state['customers'][c_id] for c_id in tours[vehicle_id]]
+    #         d_p = []
+    #         t_p = []
+    #         d_max, t_max = 0, 0
+
+    #         prev_loc = self.state['warehouses'][id]['location']
+    #         for c in c_list:
+    #             d_p.append(np.linalg.norm(np.array(prev_loc) - np.array(c.location)))
+    #             t_p.append(d_p / self.state['warehouses'][id]['vehicles'][vehicle_id].speed)
+    #             prev_loc = c.location
+
+    #         # return to the warehouse
+    #         d_p.append(np.linalg.norm(np.array(prev_loc) - np.array(self.state['warehouses'][vehicle_id]['location'])))
+    #         t_p.append(d_p / self.state['warehouses'][id]['vehicles'][vehicle_id].speed)
+    #         d_max = max(d_p)
+    #         t_max = max(t_p)
+
+    #         r = 0
+    #         rho = self.cluster_info[id]['rho']
+    #         r_term = (2 * rho) - (sum(d_p)*1/len(d_p))
+    #         for i in range(len(c_list)):
+    #             r += ((rho - d_p[i]) / d_max) + ((self.T - t_p[i]) / t_max) + (self.gamma**(len(c_list) - i) * r_term)
+    #         rewards.append(r)
+
+    #     # return the sum of the rewards
+    #     return sum(rewards)
+
+
     def compute_vrp_reward(self, optimized_tour, id):
         # organise into sub-tours
         tours = {}
@@ -566,34 +607,44 @@ class Environment():
             tours[vehicle_id].append(customer_id)
 
         # compute the reward for each sub-tour
-        rewards = []
+        tuples = []
         for vehicle_id, _ in tours.items():
-            c_list = [self.state['customers'][c_id] for c_id in tours[vehicle_id]]
-            d_p = []
-            t_p = []
-            d_max, t_max = 0, 0
+            # implement sub-tour
+            vehicle_list = []
 
+            # reinitialise vehicle
+            self.state['warehouses'][id]['vehicles'][vehicle_id].location = self.state['warehouses'][id]['location']
+            self.state['warehouses'][vehicle_id]['vehicles'][vehicle_id].current_cap = 0
+            self.state['warehouses'][vehicle_id]['vehicles'][vehicle_id].customers = []
+            self.state['warehouses'][vehicle_id]['vehicles'][vehicle_id].available = self.env_time
+
+            c_list = [self.state['customers'][c_id] for c_id in tours[vehicle_id]]
+
+            # calculate r_term for path
+            d_p, t_p = [], []
+            d_max, t_max = 0, 0
             prev_loc = self.state['warehouses'][id]['location']
             for c in c_list:
                 d_p.append(np.linalg.norm(np.array(prev_loc) - np.array(c.location)))
                 t_p.append(d_p / self.state['warehouses'][id]['vehicles'][vehicle_id].speed)
                 prev_loc = c.location
-
             # return to the warehouse
             d_p.append(np.linalg.norm(np.array(prev_loc) - np.array(self.state['warehouses'][vehicle_id]['location'])))
             t_p.append(d_p / self.state['warehouses'][id]['vehicles'][vehicle_id].speed)
             d_max = max(d_p)
             t_max = max(t_p)
-
-            r = 0
             rho = self.cluster_info[id]['rho']
             r_term = (2 * rho) - (sum(d_p)*1/len(d_p))
-            for i in range(len(c_list)):
-                r += ((rho - d_p[i]) / d_max) + ((self.T - t_p[i]) / t_max) + (self.gamma**(len(c_list) - i) * r_term)
-            rewards.append(r)
 
-        # return the sum of the rewards
-        return sum(rewards)
+            # implement subtour to get (state, action, reward) tuple
+            for i in range(len(c_list)):
+                c = c_list[i]
+                state = self.vrp_step((vehicle_id, c.id), id)
+                reward = (rho - d_p[i]) / d_max + (self.T - t_p[i]) / t_max + (self.gamma**(len(c_list) - i) * r_term)
+                vehicle_list.append((state, (vehicle_id, c.id), reward))
+            tuples.append(vehicle_list)
+
+        return tuples
      
 
     def env_step(self):
