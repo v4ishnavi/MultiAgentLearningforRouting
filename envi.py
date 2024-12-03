@@ -167,7 +167,7 @@ class Environment():
     def compute_c2s_reward(self, optimized_tour, id):
         # organise into sub-tours
         tours = {}
-        for act ion in optimized_tour:
+        for action in optimized_tour:
             vehicle_id, customer_id = action
             if vehicle_id not in tours:
                 tours[vehicle_id] = []
@@ -675,7 +675,7 @@ class Environment():
         return tuples
      
 
-    def env_step(self):
+    def env_step(self, epsilon_vrp):
         # execute the c2s agent
         # iterate through the list of unassigned customers and use c2s to decide the assignment
 
@@ -697,7 +697,7 @@ class Environment():
             self.vrp_init(customer_list)
             # iterate while customers are left without vehicle assignment
             while len([customer for customer in customer_list if customer.assignment == i + 1 and customer.vehicle_id == -1]) > 0:
-                optimized_tour = self.vrp_episode(i)
+                optimized_tour = self.vrp_episode(i, epsilon_vrp)
 
         # compute reward using optimized_tour
         c2s_reward = self.compute_c2s_reward(optimized_tour)
