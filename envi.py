@@ -719,6 +719,10 @@ class Environment():
         # print(len(self.state['customers']))
         # print(self.env_time)
         # print(self.orders)
+
+        # delete in beginning 
+        for i in range(4):
+            self.state['warehouses'][i]['vehicles'] = [] 
         
         for order in self.orders.copy():
             if self.orders == []:
@@ -800,8 +804,8 @@ class Environment():
         # self.gae_embeddings = np.random.rand(len(self.state['customers']), 2) 
 
         # delete old vehicles
-        for i in range(4):
-            self.state['warehouses'][i]['vehicles'] = [] 
+        # for i in range(4):
+        #     self.state['warehouses'][i]['vehicles'] = [] 
 
         current_customers = [customer for customer in self.state['customers'] if customer.assignment == -1]
         clocs = np.array([c.location for c in current_customers])

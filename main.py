@@ -102,6 +102,8 @@ for episode in range(EPISODES):
         
         # Handle number of vehicles
         num_vehicles = sum(len(warehouse['vehicles']) for warehouse in env.state['warehouses'])
+        # print("to check if there are actually any customers for ")
+        # print([i.id for i in env.state['warehouses'][0]['vehicles'][0].customers if len(env.state['warehouses'][0]['vehicles']) != 0])
         vehicles_for_ep += num_vehicles
 
         customers_per_vehicle = sum(len(vehicle.customers) for warehouse in env.state['warehouses'] for vehicle in warehouse['vehicles'])
@@ -197,10 +199,26 @@ for episode in range(EPISODES):
     L_per_episode.append(l_for_ep/time_steps)
     U_per_episode.append(u_for_ep/time_steps)
     vrp_rew_per_episode.append(vrprew_for_ep/time_steps)
+    vehicles_per_episode.append(vehicles_for_ep)
+    customers_per_vehicle_per_episode.append(cust_per_veh_for_ep)  
 
-    vehicles_per_episode.append(vehicles_for_ep/time_steps)
-    customers_per_vehicle_per_episode.append(cust_per_veh_for_ep/time_steps)
-    
+
+    # print("stuff")
+    # print("c2s rew")
+    # print(c2s_rew_per_episode)
+    # print("D ")
+    # print(D_per_episode)
+    # print("L")
+    # print(L_per_episode)
+    # print("U")
+    # print(U_per_episode)
+    # print("vrp rew")
+    # print(vrp_rew_per_episode)
+    # print("vehicles per ep")
+    # print(vehicles_per_episode)
+    # print("customers per vehicle")
+    # print(customers_per_vehicle_per_episode)
+
     # Log progress
     print(f"Episode {episode + 1}, c2s_Loss: {0}, vrp_Loss: {vrp_episode_loss}")
     epsilon = max(0.0, epsilon * VRP_EPSILON_DECAY)
