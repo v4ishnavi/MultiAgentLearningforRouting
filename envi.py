@@ -333,7 +333,7 @@ class Environment():
 
 
         # initialize the state for the vrp agent
-        self.vrp_states = np.random.rand(4, 19) # placeholder for actual calculation
+        self.vrp_states = None # placeholder for actual calculation
         self.vrp_actions = []
         for i in range(4):
             self.vrp_actions.append(self._compute_feasible_actions(i))
@@ -541,6 +541,7 @@ class Environment():
         customer.vehicle_id = vehicle_id
         vehicle.location = customer.location
         self.state['warehouses'][id]['vehicles'][vehicle_id] = vehicle
+        self.state['customers'][customer_id] = customer
         # maybe dont do this here and do it explicitly when needed 
 
         # perform a state update
@@ -555,6 +556,7 @@ class Environment():
         for action in self.vrp_actions[i]:
             # save state and other details that change during action
             temp_state = self.vrp_states[i]
+            temp_customer = self.state['customers'][action[1]]
             vehicle_id, customer_id = action
             temp_vehicle = self.state['warehouses'][i]['vehicles'][vehicle_id]
             new_state = self.vrp_step(action, i)
@@ -562,6 +564,7 @@ class Environment():
             # restore the state
             self.vrp_states[i] = temp_state
             self.state['warehouses'][i]['vehicles'][vehicle_id] = temp_vehicle
+            self.state['customers'][customer_id] = temp_customer
 
         # pick the top k actions
         indices = np.argsort(estimated_Qs)[-self.kappa:]
@@ -571,6 +574,7 @@ class Environment():
         # store initial state before hand
         temp_init_state = self.vrp_states[i]
         temp_vehicles = self.state['warehouses'][i]['vehicles']
+        temp_customers = self.state['customers']
 
         # peform complete rollout for each of the top k actions
         for index in indices:
@@ -583,11 +587,13 @@ class Environment():
                 for action in new_feasible_actions:
                     temp_state = self.vrp_states[i]
                     vehicle_id, customer_id = action
+                    temp_customer = self.state['customers'][customer_id]
                     temp_vehicle = self.state['warehouses'][i]['vehicles'][vehicle_id]
                     new_state = self.vrp_step(action, i)
                     estimated_Qs.append(self.vrp_l(new_state))
                     self.vrp_states[i] = temp_state
                     self.state['warehouses'][i]['vehicles'][vehicle_id] = temp_vehicle
+                    self.state['customers'][customer_id] = temp_customer
                 best_q_index = np.argmax(estimated_Qs)
                 paths[index].append(new_feasible_actions[best_q_index])
                 self.vrp_step(new_feasible_actions[best_q_index], i)
@@ -595,6 +601,7 @@ class Environment():
         
         self.vrp_states[i] = temp_init_state
         self.state['warehouses'][i]['vehicles'] = temp_vehicles
+        self.state['customers'] = temp_customers
         
         # need helper to compute the distance of the path
         for j in range(self.kappa):
@@ -733,21 +740,22 @@ class Environment():
 
         # execute the vrp agent
         customer_list = [customer for customer in self.state['customers'] if (customer.vehicle_id == -1 and customer.deferred != 5)]
-        vrp_states = []
-        vrp_actions = []
+
+        c2s_return = []
+        vrp_return = []
         for i in range(4):
             self.vrp_init(customer_list)
             # iterate while customers are left without vehicle assignment
             while len([customer for customer in customer_list if customer.assignment == i + 1 and customer.vehicle_id == -1]) > 0:
                 optimized_tour = self.vrp_episode(i, epsilon_vrp)
 
-        # compute reward using optimized_tour
-        c2s_reward = self.compute_c2s_reward(optimized_tour)
-        c2s_return = []
-        for c in c2s_tuples:
-            rew = c2s_reward[c[2]]
-            c2s_return.append((c[0], c[1], rew))
-        vrp_reward = self.compute_vrp_reward(optimized_tour)
+            # compute reward using optimized_tour
+            c2s_reward = self.compute_c2s_reward(optimized_tour)
+            for c in c2s_tuples:
+                rew = c2s_reward[c[2]]
+                c2s_return.append((c[0], c[1], rew))
+            vrp_reward = self.compute_vrp_reward(optimized_tour)
+            vrp_return.append(vrp_reward)
         
         # increment environment time
         self.env_time += self.T

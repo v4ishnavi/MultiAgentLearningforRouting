@@ -23,6 +23,7 @@ VRP_ACTION_DIM = 1  # Discrete actions
 VRP_BUFFER_CAPACITY = 100000  # Replay buffer capacity
 VRP_LEARNING_RATE = 0.001  # Learning rate for Adam optimizer
 VRP_EPSILON_START = 1.0  # Initial exploration rate
+VRP_EPSILON_DECAY = 0.999  # Decay rate of exploration rate
 VRP_TARGET_UPDATE = 4  # Frequency of target network updates
 
 EPISODES = 1000  # Number of training episodes
@@ -43,17 +44,27 @@ replay_buffer_c2s = ReplayBuffer(C2S_BUFFER_CAPACITY)
 optimizer_vrp = optim.Adam(dqn_vrp.parameters(), lr=C2S_LEARNING_RATE)
 replay_buffer_vrp = ReplayBuffer(VRP_BUFFER_CAPACITY)
 
+c2s_flag = 1
+vrp_flag = 1
 
 # Training loop for DQN with delayed rewards
+epsilon = VRP_EPSILON_START  # Initial exploration rate
 for episode in range(EPISODES):
     # Reset the environment
     # Create an environment
     vrp_episode_loss = 0
-    env = Environment(1, 1, dqn_c2s, dqn_vrp)
+    if c2s_flag and vrp_flag:
+        env = Environment(1, 1, dqn_c2s, dqn_vrp)
+    elif c2s_flag:
+        env = Environment(1, 0, dqn_c2s, None)
+    elif vrp_flag:
+        env = Environment(0, 1, None, dqn_vrp)
+    else:
+        env = Environment(0, 0)
 
     # T = 0
     env.initialize_environment()
-    c2s_rewards, vrp_rewards = env.env_step() 
+    c2s_rewards, vrp_rewards = env.env_step(epsilon) 
 
     # while not done:
     #     # Epsilon-greedy policy
@@ -80,9 +91,10 @@ for episode in range(EPISODES):
         for i in range(len(c2s_rewards) -1):
             replay_buffer_c2s.add(c2s_rewards[i][0], c2s_rewards[i][1], c2s_rewards[i][2], c2s_rewards[i+1][0], False)
             
-        for vehicle in vrp_rewards:
-            for i in range(len(vehicle)):
-                replay_buffer_vrp.add(vehicle[i][0], vehicle[i][2])
+        for agent in vrp_rewards:
+            for vehicle in agent:
+                for i in range(len(vehicle)):
+                    replay_buffer_vrp.add(vehicle[i][0], vehicle[i][2])
         
         # for state, action, reward in zip(states_batch, actions_batch, rewards_batch):
         #     replay_buffer.add(state, action, reward, state, False)  # 'next_state' placeholder for now
@@ -129,5 +141,7 @@ for episode in range(EPISODES):
 
     # Log progress
     print(f"Episode {episode}, c2s_Loss: {loss_c2s.item()}, vrp_Loss: {vrp_episode_loss}")
+    epsilon = max(0.0, epsilon * VRP_EPSILON_DECAY)
+    
 
 print("Training completed.")
