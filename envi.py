@@ -153,14 +153,14 @@ class Environment():
                 action = len(self.state['warehouses']) + 1
         return action
     
-    def c2s_l(self, epsilon):
+    def c2s_l(self):
         # dqn returns the action to be taken
-        if random.random() < epsilon:
-            action = random.randint(1, 6)  # Random action
-        else:
-            with torch.no_grad():
-                q_values = self.dqn_c2s(torch.FloatTensor(self.get_c2s_observation()))
-                action = torch.argmax(q_values).item()  # Greedy action
+        # if random.random() < epsilon:
+        #     action = random.randint(1, 6)  # Random action
+        # else:
+        with torch.no_grad():
+            q_values = self.dqn_c2s(torch.FloatTensor(self.get_c2s_observation()))
+            action = torch.argmax(q_values).item()  # Greedy action
         return action
         
     def get_c2s_observation(self):
