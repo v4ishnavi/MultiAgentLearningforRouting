@@ -7,6 +7,7 @@ from gae import GraphAutoEncoder
 from datagen import generate_data
 from torch_geometric.loader import DataLoader
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -27,10 +28,10 @@ def train_model(model, data_loader, num_epochs=100, lr=0.01):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     epoch_losses = []  # To store average loss per epoch
     
-    for epoch in range(num_epochs):
+    for epoch in tqdm(range(num_epochs), desc="Training Progress"):
         model.train()
         total_loss = 0
-        for data in data_loader:
+        for data in tqdm(data_loader, desc=f"Epoch {epoch + 1}/{num_epochs}", leave=False):
             optimizer.zero_grad()
             adj_hat = model(data.x, data.edge_index)
             
@@ -50,7 +51,9 @@ def train_model(model, data_loader, num_epochs=100, lr=0.01):
         avg_loss = total_loss / len(data_loader)
         epoch_losses.append(avg_loss)
         logger.info(f'Epoch {epoch+1}/{num_epochs}, Average Loss: {avg_loss:.4f}')
-    
+        
+    torch.save(model.state_dict(), 'model.pt')
+    print("Model saved as 'model.pt'")
     return epoch_losses
 
 if __name__ == "__main__":
@@ -59,7 +62,7 @@ if __name__ == "__main__":
     parser.add_argument('--hidden_dim', type=int, default=16, help='Hidden dimension size for the GCN layers')
     parser.add_argument('--num_epochs', type=int, default=50, help='Number of epochs to train the model')
     parser.add_argument('--learning_rate', type=float, default=0.01, help='Learning rate for the optimizer')
-    parser.add_argument('--train_size', type=int, default=10, help='Number of graphs to generate for training')
+    parser.add_argument('--train_size', type=int, default=1000, help='Number of graphs to generate for training')
     parser.add_argument('--eval_size', type=int, default=2, help='Number of graphs to generate for evaluation')
     args = parser.parse_args()
     
@@ -77,13 +80,13 @@ if __name__ == "__main__":
     
     # Generate training data
     print("Generating training data...")
-    graph_list_train = [generate_data() for _ in range(train_size)]
+    graph_list_train = [generate_data() for _ in tqdm(range(train_size), desc="Generating Training Data")]
     print("Generated training data")
     data_loader = DataLoader(graph_list_train, batch_size=batch_size, shuffle=True)
     
     # Train the model and collect losses
     losses = train_model(model, data_loader, num_epochs=num_epochs, lr=learning_rate)
-    
+   
     # Plot training losses
     plt.figure(figsize=(10, 6))
     plt.plot(range(1, num_epochs + 1), losses, marker='o', linestyle='-', color='b')
@@ -96,7 +99,7 @@ if __name__ == "__main__":
     
     # Evaluate model
     model.eval()
-    graph_list_eval = [generate_data() for _ in range(eval_size)]
+    graph_list_eval = [generate_data() for _ in tqdm(range(eval_size), desc="Generating Evaluation Data")]
     for i, data in enumerate(graph_list_eval):
         embeddings = model.encode(data.x, data.edge_index)
         logger.info(f"Embeddings for graph {i+1}: {embeddings}")
