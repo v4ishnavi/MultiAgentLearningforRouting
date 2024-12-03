@@ -1,11 +1,12 @@
 import numpy as np 
 import random
 import torch
+from gae import GraphAutoEncoder
 
 class Customer():
     def __init__(self, id, arrival, T=100, SAT=False):
         self.id = id
-        self.location = (np.random.uniform(-100, 100), np.random.uniform(-100, 100))
+        self.location = (np.random.uniform(-100, 100), np.random.uniform(-100, 100)) #!change TO numpy array??
         self.demand = np.random.randint(1, 11)
         self.time_window = (np.random.randint(T // 5, 4 *(T //5)), 0)
         self.time_window = (self.time_window[0], self.time_window[0] + np.random.randint(T // 10, 2 * T))
@@ -31,12 +32,13 @@ class Vehicle():
 
 
 class Environment():
-    def __init__(self, vrp=1, c2s=1, dqn_c2s=None, dqn_vrp=None):
+    def __init__(self, vrp=1, c2s=1, dqn_c2s=None, dqn_vrp=None, 
+    gae_model_path = "model.pt"):
         self.vrp = vrp
         self.c2s = c2s
         self.dqn_c2s = dqn_c2s
         self.dqn_vrp = dqn_vrp
-        self.state = self._initialize_environment()
+        self.state = self.initialize_environment() #!change
         self.orders = []
         self.tau = 1000
         self.T = 100
@@ -47,11 +49,19 @@ class Environment():
         self.env_time = 0
         self.service_time = 1
         self.gamma = 0.9
+        self.gae_input_dim = 2 
+        self.gae_output_dim = 2 
+        self.gae_hidden_dim = 16
+        self.gae_model_path = gae_model_path
+
+        self.gae_model = GraphAutoEncoder(self.gae_input_dim, self.gae_output_dim, self.gae_hidden_dim)
+        self.gae_model.load_state_dict(torch.load(self.gae_model_path))
+        self.gae_model.eval()
     
     def initialize_environment(self):
-        num_customers = np.random.randint(200, 301)
+        num_customers = np.random.randint(200, 300)
         env_info = {
-            "warehouses": [
+            "warehouses": [ #!change locations to numpy arrays? 
                 {"location": (50, 50), "inventory": self.P_0max, "vehicles": []},
                 {"location": (50, -50), "inventory": self.P_0max, "vehicles": []},
                 {"location": (-50, -50), "inventory": self.P_0max, "vehicles": []},
@@ -60,28 +70,83 @@ class Environment():
             "customers": [Customer(i, arrival=0)for i in range(num_customers)],
         }
 
-        # init gae_embeddings
-        self.gae_embeddings = np.random.rand(len(env_info['customers']), 2)
+        clocs = np.array([c.location for c in env_info['customers']])
+        wlocs = np.array([w['location'] for w in env_info['warehouses']])
+        # Generate edges using rho-based clustering and negative sampling
+        customer_edges, rho = self._generate_edges(clocs, wlocs, n=5)
+
+        # Initialize GAE embeddings for customers
+        customer_features = torch.tensor(clocs, dtype=torch.float)
+        # Compute embeddings using the GAE model
+        with torch.no_grad():
+            self.gae_embeddings = self.gae_model.encode(customer_features, customer_edges).numpy()
         self.env_info = env_info   
         self.orders = [env_info['customers'][i] for i in range(len(env_info['customers']))] 
         
         return env_info
     
-    def time_step(self):
-        # need to generate new customers
-        # after generating, pass the new list of customers to the gae and update embeddings
-        pass
+    def _generate_edges(self, clocs, wlocs, n=5):
+        # Perform rho-based clustering and negative sampling
+        ccount = len(clocs)
+        adj = np.zeros((ccount, ccount))
+        # Compute distances between all customers
+        for i in range(ccount):
+            for j in range(ccount):
+                adj[i, j] = np.linalg.norm(clocs[i] - clocs[j])
+        # Compute distances from customers to the nearest warehouse
+        depot_dists = np.array([min([np.linalg.norm(clocs[i] - w) for w in wlocs]) for i in range(ccount)])
+        # Form clusters based on nearest neighbors to warehouses
+        assigned = np.zeros(ccount, dtype=bool)
+        clusters = []
+        while not np.all(assigned):
+            new_cluster = []
+            unassigned = np.where(~assigned)[0]
+            nearest = unassigned[np.argmin(depot_dists[unassigned])]
+            new_cluster.append(nearest)
+            assigned[nearest] = True
+            temp = new_cluster.copy()
+            for c in temp:
+                old_len = len(new_cluster)
+                unassigned = np.where(~assigned)[0]
+                nearest_neighbors = unassigned[np.argsort([adj[c, i] for i in unassigned])[:n]]
+                for nn in nearest_neighbors:
+                    if not assigned[nn]:
+                        new_cluster.append(nn)
+                        assigned[nn] = True
+                if len(new_cluster) == old_len:
+                    break
+            clusters.append(new_cluster)
+        # Compute cluster diameters and determine rho
+        diameters = [max([adj[i, j] for i in c for j in c if i != j]) if len(c) > 1 else 0 for c in clusters]
+        rho = np.mean(diameters) / 2 if diameters else 0
+        # Form adjacency matrix with nodes within `rho` of a warehouse
+        final_adj = np.zeros((ccount, ccount))
+        for i in range(ccount):
+            for j in range(ccount):
+                if np.any([np.linalg.norm(clocs[i] - w) < rho for w in wlocs]) and np.any([np.linalg.norm(clocs[j] - w) < rho for w in wlocs]):
+                    final_adj[i, j] = 1
+        # Add negative samples
+        count_positives = np.sum(final_adj == 1)
+        count_negatives = 0
+        while count_negatives < count_positives:
+            i_rand, j_rand = np.random.randint(0, ccount), np.random.randint(0, ccount)
+            if adj[i_rand, j_rand] > rho and final_adj[i_rand, j_rand] == 0:
+                final_adj[i_rand, j_rand] = -1
+                count_negatives += 1
+        # Convert adjacency matrix to edge indices
+        edges = utils.dense_to_sparse(torch.tensor(final_adj, dtype=torch.float))[0]
+        return edges, rho
     
     def c2s_h(self):
         order = self.orders[0]
         action = 0
-        if order['assignment'] == 0:
+        if order.assignment == 0: #!change 
             distances = []
             for warehouse in self.state['warehouses']:
-                distances.append(np.linalg.norm(np.array(warehouse['location']) - np.array(order['location'])))
+                distances.append(np.linalg.norm(np.array(warehouse['location']) - np.array(order.location))) #!change
             indices = np.argsort(distances)
             for i in indices:
-                if self.state['warehouses'][i]['inventory'] >= order['demand']:
+                if self.state['warehouses'][i]['inventory'] >= order.demand: #!change
                     action = self.state['warehouses'].index(self.state['warehouses'][i]) + 1
                     break
             else:
@@ -101,7 +166,7 @@ class Environment():
     def get_c2s_observation(self):
         # The state for the c2s agent is the 19 state table in the paper
         observation = []
-        customers_id = self.orders[0]['id']
+        customers_id = self.orders[0].id #!change
         observation.append(self.gae_embeddings[customers_id][0])
         observation.append(self.gae_embeddings[customers_id][1])
         # compute the distance between the customer and the warehouse(not saving any time by doing this earlier)
@@ -129,16 +194,16 @@ class Environment():
         # action is the warehouse to assign the customer to
         # action = 0 means defer
         order = self.orders[0]
-        order['assignment'] = action
+        order.assignment = action #!change
         if action == 5:
-            order['deferred'] += 1
+            order.deferred += 1 #!change
         else:
-            self.state['warehouses'][action-1]['inventory'] -= order['demand']
-            order['deferred'] = 0
-        if order['deferred'] > 0:
+            self.state['warehouses'][action-1]['inventory'] -= order.demand #!change
+            order.deferred = 0 #!change
+        if order.deferred > 0: #!change
             self.orders.append(order)
         self.orders = self.orders[1:]
-        return self._get_c2s_observation()
+        return self.get_c2s_observation() #!change from internal to external class fn
     
     def compute_c2s_reward(self, optimized_tour, id):
         # organise into sub-tours
@@ -191,7 +256,7 @@ class Environment():
 
 
     def vrp_h(self, id, customers):
-        customers = [customer for customer in customers if customer['assignment'] == id + 1]
+        customers = [customer for customer in customers if customer.assignment == id + 1] #!change dict to class not
 
         # Sort the assigned customers at the warehouse according to their time window opening.
         customers = sorted(customers, key=lambda x: x.time_window[0])
@@ -253,12 +318,13 @@ class Environment():
         self.cluster_info = [{}, {}, {}, {}]
 
         for c in customers:
-            if c.vehicle_id == -1 and c.assigned != 5:
+            if c.vehicle_id == -1 and c.assignment != 5: #!change
                 c.arrival = self.env_time
 
         for i in range(4):
             clocs = [customer.location for customer in customers if customer.assignment == i + 1 and customer.cluster == None]
-            c_idx = [customer.id for customer in customers if customer.assignment == i + 1 and customer.cluster == None]
+            c_idx = [customer.id for customer in customers if customer.assignment == i + 1 and customer.cluster == None] 
+            #!change : gptprev asking to store customers in cidx??
             cluster_indices, centroids, radii, rho = self._vrp_cluster_gen(clocs, 10, self.state['warehouses'][i]['location'])
             for c in c_idx:
                 customers[c].cluster = cluster_indices[c]
@@ -331,7 +397,7 @@ class Environment():
     def compute_feasible_actions(self, vrp_id):
         # find the list of vehicles and customers
         vehicles = self.state['warehouses'][vrp_id]['vehicles']
-        customers = [customer for customer in self.state['customers'] if customer['assignment'] == vrp_id + 1] # customer.vehicle_id == -1
+        customers = [customer for customer in self.state['customers'] if customer.assignment == vrp_id + 1] # customer.vehicle_id == -1 !change
 
         # find the feasible actions
         # check distance between each vehicle and customer
@@ -483,7 +549,7 @@ class Environment():
         self.vrp_states[id] = action_vector
         return action_vector
     
-    def vrp_episode(self, i):
+    def vrp_episode(self, i, epsilon):
         self.vrp_actions[i] = self.compute_feasible_actions(i)
         estimated_Qs = []
 
@@ -539,7 +605,11 @@ class Environment():
             distances[j] = self.compute_distance(i, paths[j])
             
         # action with lowest distance is selected
-        index = np.argmin(distances)
+        # implement epsilon greedy
+        if random.random() < epsilon:
+            index = random.randint(0, self.kappa - 1)
+        else:
+            index = np.argmin(distances)
 
         # should use optimised_sub_tour 
         self.vrp_step(paths[index][0], i)
@@ -612,15 +682,15 @@ class Environment():
         return tuples
      
 
-    def env_step(self):
+    def env_step(self, epsilon_vrp):
         # execute the c2s agent
         # iterate through the list of unassigned customers and use c2s to decide the assignment
 
         c2s_tuples = []
-        for order in self.orders:
+        for order in self.orders.copy():
             state = self.get_c2s_observation()
-            id = order['id']
-            if order['assignment'] == 0:
+            id = order.id #!change 
+            if order.assignment == 0: #!change
                 action = self.c2s_l()
                 self.c2s_step(action)
                 c2s_tuples.append((state, action, id))
@@ -634,7 +704,7 @@ class Environment():
             self.vrp_init(customer_list)
             # iterate while customers are left without vehicle assignment
             while len([customer for customer in customer_list if customer.assignment == i + 1 and customer.vehicle_id == -1]) > 0:
-                optimized_tour = self.vrp_episode(i)
+                optimized_tour = self.vrp_episode(i, epsilon_vrp)
 
         # compute reward using optimized_tour
         c2s_reward = self.compute_c2s_reward(optimized_tour)
@@ -649,15 +719,23 @@ class Environment():
 
         # set the customers who've been deferred back to unasigned
         for order in self.orders:
-            if order['assignment'] == 5:
-                order['assignment'] = 0
+            if order.assignment == 5: #!change
+                order.assignment = 0 #!change
         
         # generate new customers
-        num_customers = np.random.randint(200, 301)
-        new_customers = [Customer(i, arrival=self.env_time) for i in range(num_customers)]
+        num_customers = np.random.randint(200, 300)
+        new_customers = [Customer(len(self.state['customers']) + i, arrival=self.env_time) for i in range(num_customers)] # !change
         self.orders += new_customers
-        self.state['customers'] += new_customers
-        self.gae_embeddings = np.random.rand(len(self.state['customers']), 2)
+        self.state['customers'] += new_customers 
+        # self.gae_embeddings = np.random.rand(len(self.state['customers']), 2)
+
+        clocs = np.array([c.location for c in self.state["customers"]])
+        wlocs = np.array([w['location'] for w in self.state['warehouses']])
+        customer_edges, rho = self._generate_edges(clocs, wlocs, n=5)
+
+        customer_features = torch.tensor(clocs, dtype=torch.float)
+        with torch.no_grad():
+            self.gae_embeddings = self.gae_model.encode(customer_features, customer_edges).numpy()
         
         return c2s_return, vrp_reward
 
@@ -746,9 +824,9 @@ class Environment():
     def Euclidean_CC(self, i, j):
         customer_i = self.state['customers'][i].location
         customer_j = self.state['customers'][j].location
-        return np.linalg.norm(np.array(customer_i.location) - np.array(customer_j.location))
+        return np.linalg.norm(np.array(customer_i) - np.array(customer_j)) #!change
 
     def Euclidean_CV(self, c, w, v): # customer, warehouse, vehicle
         customer = self.state['customers'][c].location
         vehicle = self.state['warehouses'][w]['vehicles'][v].location
-        return np.linalg.norm(np.array(customer.location) - np.array(vehicle.location))
+        return np.linalg.norm(np.array(customer) - np.array(vehicle)) #!change 
