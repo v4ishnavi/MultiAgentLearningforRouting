@@ -33,22 +33,22 @@ def optimize_route(customers_R, customers_A, depot, dmax, delta):
             if i != j:
                 # If O_j + 1 == O_i, then D[i] is the distance between customers
                 s.add(If(And(O[i] > 1, O[i] == O[j] + 1), 
-                         D[i] == np.linalg.norm(np.array(customers[i]) - np.array(customers[j])),
+                         D[i] == np.linalg.norm(customers[i] - customers[j]),
                          True))  # No constraint otherwise
     
     # First customer constraint: Distance from current location
     for i in range(N):
-        s.add(If(O[i] == 1, D[i] == np.linalg.norm(np.array(customers[i]) - np.array(depot)), True))
+        s.add(If(O[i] == 1, D[i] == np.linalg.norm(customers[i] - depot), True))
     
     # Return distance
     for i in range(N):
-        s.add(If(O[i] == N, D_return == np.linalg.norm(np.array(customers[i]) - np.array(depot)), True))
+        s.add(If(O[i] == N, D_return == np.linalg.norm(customers[i] - depot), True))
     
     
     # Constraints specific to R
     for i in range(R):
         # CPS constraint: Constrained position shifting (Constraint 11)
-        s.add(And(O[i] >= i + 1 - delta, O[i] <= i + 1 + delta))
+        s.add(And(O[i] >= i - delta, O[i] <= i + delta))
         
         # Force all customers in R to be served (Constraint 12)
         s.add(O[i] >= 1)
@@ -73,9 +73,9 @@ def optimize_route(customers_R, customers_A, depot, dmax, delta):
         return None
 
 # Example usage
-# customers_R = [(2, 3), (8, 6)]  # Example coordinates for customers in R
-# customers_A = [(5, 7)]          # Example coordinates for additional customers in A
-# depot = (0, 0)
+# customers_R = [np.array([2, 3]), np.array([8, 6])]  # Example coordinates for customers in R
+# customers_A = [np.array([5, 7])]          # Example coordinates for additional customers in A
+# depot = np.array([0, 0])
 # current_loc = (1, 1)
 # dmax = 100
 # delta = 1

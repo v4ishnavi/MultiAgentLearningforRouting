@@ -1,5 +1,4 @@
-from envi import Environment, Customer, Vehicle, CV_pair
-
+from envi import Environment, Customer, Vehicle
 from DQN import DQN_c2s, ReplayBuffer, DQN_vrp
 import torch
 import torch.nn as nn
@@ -7,6 +6,9 @@ import torch.optim as optim
 import numpy as np
 import random
 from collections import deque
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.set_default_device(device)
 
 
 # Hyperparameters
@@ -44,8 +46,8 @@ replay_buffer_c2s = ReplayBuffer(C2S_BUFFER_CAPACITY)
 optimizer_vrp = optim.Adam(dqn_vrp.parameters(), lr=C2S_LEARNING_RATE)
 replay_buffer_vrp = ReplayBuffer(VRP_BUFFER_CAPACITY)
 
-c2s_flag = 1
-vrp_flag = 1
+c2s_flag = 0
+vrp_flag = 0
 
 # Training loop for DQN with delayed rewards
 epsilon = VRP_EPSILON_START  # Initial exploration rate
@@ -86,15 +88,17 @@ for episode in range(EPISODES):
     #         rewards_batch = [rewards] * len(states_batch)
     #         done = True  # End the batch
 
-    for time_step in range(10):
+    for time_step in range(5):
         # Add experiences to replay buffer
         for i in range(len(c2s_rewards) -1):
             replay_buffer_c2s.add(c2s_rewards[i][0], c2s_rewards[i][1], c2s_rewards[i][2], c2s_rewards[i+1][0], False)
-            
+            # state, action, reward, next_state, done
+
         for agent in vrp_rewards:
             for vehicle in agent:
                 for i in range(len(vehicle)):
                     replay_buffer_vrp.add(vehicle[i][0], vehicle[i][2])
+                    # state, reward
         
         # for state, action, reward in zip(states_batch, actions_batch, rewards_batch):
         #     replay_buffer.add(state, action, reward, state, False)  # 'next_state' placeholder for now
@@ -122,7 +126,7 @@ for episode in range(EPISODES):
             optimizer_c2s.zero_grad()
             loss_c2s.backward()
             optimizer_c2s.step()
-            
+
         if len(replay_buffer_vrp) >= BATCH_SIZE:
             # Sample a batch
             states,rewards = replay_buffer_vrp.sample(BATCH_SIZE)

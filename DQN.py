@@ -22,7 +22,7 @@ class DQN_c2s(nn.Module):
 
 class DQN_vrp(nn.Module):
     def __init__(self, input_dim, output_dim):
-        super(DQN_c2s, self).__init__()
+        super(DQN_vrp, self).__init__()
         self.fc1 = nn.Linear(input_dim, 128)
         self.fc2 = nn.Linear(128, 64)
         self.fc3 = nn.Linear(64, 32)
