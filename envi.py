@@ -45,7 +45,7 @@ class Environment():
         self.orders = []
         self.tau = 1000
         self.T = 100
-        self.P_0max = 100
+        self.P_0max = 300
         self.cluster_n = 5
         self.vehicle_cap = 10
         self.clock = 0
@@ -213,9 +213,11 @@ class Environment():
             self.state['warehouses'][action]['inventory'] -= self.state['customers'][order].demand
             self.state['customers'][order].vehicle_id = -1
 
-        if self.state['customers'][order].deferred > 0:
+        if self.state['customers'][order].assignment == 4:
             self.orders.append(order)
         self.orders = self.orders[1:]
+        if self.orders == []:
+            return None 
         return self.get_c2s_observation() #!change from internal to external class fn
     
     def compute_c2s_reward(self, optimized_tour, id):
@@ -292,7 +294,7 @@ class Environment():
 
                     if added:
                         # assign customer to vehicle
-                        vehicle.customers.append(c)
+                        vehicle.customers.append(c.id)
                         vehicle.current_cap += c.demand
                         c.vehicle_id = vehicle.id
                         vehicle.location = c.location
@@ -304,18 +306,22 @@ class Environment():
 
 
             if added == False and vehicle.customers == []: # no more customers to serve
+                # remove vehicle
+                self.state['warehouses'][id]['vehicles'].remove(vehicle)
                 break
             elif added == False: # spawn new vehicle
                 vehicle = Vehicle(len(self.state['warehouses'][id]['vehicles']), self.state['warehouses'][id]['location'], self.vehicle_cap, self.env_time)
                 self.state['warehouses'][id]['vehicles'].append(vehicle)
                 v_idx += 1
 
+        unserved = [c.id for c in customers if not served[customers.index(c)]]
+
         # return tour: list of c-v assignments
         tour = []
         for vehicle in self.state['warehouses'][id]['vehicles']:
             for customer in vehicle.customers:
-                tour.append((customer.id, vehicle.id))
-        return tour
+                tour.append((customer, vehicle.id))
+        return tour, unserved
 
     def vrp_l(self, state):
         self.dqn_vrp.eval()
@@ -334,10 +340,10 @@ class Environment():
             if cu.vehicle_id == -1 and cu.assignment != 4:
                 self.state['customers'][c].arrival = self.env_time
 
+
         for i in range(4):
             clocs = [self.state['customers'][c].location for c in customer_ids if self.state['customers'][c].assignment == i and self.state['customers'][c].cluster == None]
             c_idx = [self.state['customers'][c].id for c in customer_ids if self.state['customers'][c].assignment == i and self.state['customers'][c].cluster == None] 
-
             cluster_indices, centroids, radii, rho = self._vrp_cluster_gen(c_idx, clocs, self.cluster_n, self.state['warehouses'][i]['location'])
             for c in c_idx:
                 self.state['customers'][c].cluster = cluster_indices[c]
@@ -709,9 +715,11 @@ class Environment():
         # print(self.orders)
         
         for order in self.orders.copy():
+            if self.orders == []:
+                break
             state = self.get_c2s_observation()
-            id = order #!change 
-            if self.state['customers'][order].assignment == -1: #!change
+            id = order
+            if self.state['customers'][order].assignment == -1:
                 if self.c2s == 1:
                     action = self.c2s_l()
                 else:
@@ -719,6 +727,8 @@ class Environment():
                 self.c2s_step(action)
                 c2s_tuples.append((state, action, id))
 
+        # for c in self.states.customers:
+        #     if c.deferred > 0 and c.assignment != 4 and c.ve
 
         # execute the vrp agent
         customer_list = [customer.id for customer in self.state['customers'] if (customer.vehicle_id == -1 and customer.assignment != 4)]
@@ -736,14 +746,17 @@ class Environment():
                 final_tour = self.get_current_tour(i)
                 optimized_tour = self.optimise_tour(i, final_tour)
             else:
-                _ = self.vrp_h(i, customer_list)
+                _, unserved = self.vrp_h(i, customer_list)
                 optimized_tour = self.get_current_tour(i)
 
             # compute reward using optimized_tour
             c2s_reward = self.compute_c2s_reward(optimized_tour, i)
             for c in c2s_tuples:
                 if self.state['customers'][c[2]].assignment == i:
-                    rew = c2s_reward[c[2]]
+                    if self.vrp == 0 and c[2] in unserved:
+                        rew = -10 * (self.gamma**self.state['customers'][c[2]].deferred)
+                    else:
+                        rew = c2s_reward[c[2]]
                     c2s_return.append((c[0], c[1], rew))
             vrp_reward = self.compute_vrp_reward(optimized_tour, i)
             vrp_return.append(vrp_reward)
@@ -757,6 +770,10 @@ class Environment():
         for order in self.orders:
             if self.state['customers'][order].assignment == 4:
                 self.state['customers'][order].assignment = -1
+        
+        # restock warehouses
+        for i in range(4):
+            self.state['warehouses'][i]['inventory'] = self.P_0max
         
         # generate new customers
         num_customers = np.random.randint(200, 300)
@@ -777,6 +794,12 @@ class Environment():
         clocs = np.array([c.location for c in current_customers])
         wlocs = np.array([w['location'] for w in self.state['warehouses']])
         customer_edges, _ = self._generate_edges(clocs, wlocs, n=5)
+        
+        print(len(self.orders), len(current_customers))
+        for o in self.orders:
+            if self.state['customers'][o].assignment != -1:
+                print('Assigned customer', self.state['customers'][o].assignment, self.state['customers'][o].deferred, self.state['customers'][o].arrival, self.state['customers'][o].vehicle_id)
+                break
 
         customer_features = torch.tensor(clocs, dtype=torch.float)
         with torch.no_grad():
@@ -785,7 +808,7 @@ class Environment():
         self.gae_embeddings = {}
         for i in range(len(gae_embeddings_new)):
             self.gae_embeddings[current_customers[i].id] = gae_embeddings_new[i]
-        
+
         print('Time step done')
         return c2s_return, vrp_return
 
@@ -811,7 +834,7 @@ class Environment():
             for customer in vehicle.customers:
                 if vehicle.id not in tour:
                     tour[vehicle.id] = []
-                tour[vehicle.id].append(customer.id)
+                tour[vehicle.id].append(customer)
         return tour
 
     def get_optimized_subtour(self, i, v_id):

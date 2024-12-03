@@ -106,7 +106,7 @@ for episode in range(EPISODES):
         #     replay_buffer.add(state, action, reward, state, False)  # 'next_state' placeholder for now
 
         # Train the model if buffer has enough samples
-        if len(replay_buffer_c2s) >= BATCH_SIZE:
+        if len(replay_buffer_c2s) >= BATCH_SIZE and c2s_flag:
             # Sample a batch
             states, actions, rewards, next_states, dones = replay_buffer_c2s.sample(BATCH_SIZE)
 
@@ -129,7 +129,7 @@ for episode in range(EPISODES):
             loss_c2s.backward()
             optimizer_c2s.step()
 
-        if len(replay_buffer_vrp) >= BATCH_SIZE:
+        if len(replay_buffer_vrp) >= BATCH_SIZE and vrp_flag:
             # Sample a batch
             states,rewards = replay_buffer_vrp.sample(BATCH_SIZE)
 
@@ -146,7 +146,7 @@ for episode in range(EPISODES):
             vrp_episode_loss += loss.item()
 
     # Log progress
-    print(f"Episode {episode}, c2s_Loss: {loss_c2s.item()}, vrp_Loss: {vrp_episode_loss}")
+    print(f"Episode {episode + 1}, c2s_Loss: {0}, vrp_Loss: {vrp_episode_loss}")
     epsilon = max(0.0, epsilon * VRP_EPSILON_DECAY)
     
 
