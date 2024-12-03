@@ -59,7 +59,7 @@ class Environment():
         self.gae_model.eval()
     
     def initialize_environment(self):
-        num_customers = np.random.randint(200, 301)
+        num_customers = np.random.randint(200, 300)
         env_info = {
             "warehouses": [
                 {"location": (50, 50), "inventory": self.P_0max, "vehicles": []},
@@ -70,31 +70,72 @@ class Environment():
             "customers": [Customer(i, arrival=0)for i in range(num_customers)],
         }
 
-        # init gae_embeddings
-        customer_features = torch.tensor([[c.location[0], c.location[1]] for c in env_info['customers']], dtype=torch.float)
-        customer_edges = self._generate_edges(num_customers) 
+        clocs = np.array([c.location for c in env_info['customers']])
+        wlocs = np.array([w['location'] for w in env_info['warehouses']])
+        # Generate edges using rho-based clustering and negative sampling
+        customer_edges, rho = self._generate_edges(clocs, wlocs, n=5)
+
+        # Initialize GAE embeddings for customers
+        customer_features = torch.tensor(clocs, dtype=torch.float)
+        # Compute embeddings using the GAE model
         with torch.no_grad():
             self.gae_embeddings = self.gae_model.encode(customer_features, customer_edges).numpy()
-        # self.gae_embeddings = np.random.rand(len(env_info['customers']), 2)
         self.env_info = env_info   
         self.orders = [env_info['customers'][i] for i in range(len(env_info['customers']))] 
         
         return env_info
     
-    # def time_step(self):
-    #     # need to generate new customers
-    #     # after generating, pass the new list of customers to the gae and update embeddings
-
-    #     pass
-
-    def _generate_edges(self, num_nodes):
-        edge_index = []
-        for i in range(num_nodes):
-            for j in range(i + 1, num_nodes):
-                edge_index.append([i, j])
-                edge_index.append([j, i])
-        return torch.tensor(edge_index, dtype=torch.long).t().contiguous()
-        # 
+    def _generate_edges(self, clocs, wlocs, n=5):
+        # Perform rho-based clustering and negative sampling
+        ccount = len(clocs)
+        adj = np.zeros((ccount, ccount))
+        # Compute distances between all customers
+        for i in range(ccount):
+            for j in range(ccount):
+                adj[i, j] = np.linalg.norm(clocs[i] - clocs[j])
+        # Compute distances from customers to the nearest warehouse
+        depot_dists = np.array([min([np.linalg.norm(clocs[i] - w) for w in wlocs]) for i in range(ccount)])
+        # Form clusters based on nearest neighbors to warehouses
+        assigned = np.zeros(ccount, dtype=bool)
+        clusters = []
+        while not np.all(assigned):
+            new_cluster = []
+            unassigned = np.where(~assigned)[0]
+            nearest = unassigned[np.argmin(depot_dists[unassigned])]
+            new_cluster.append(nearest)
+            assigned[nearest] = True
+            temp = new_cluster.copy()
+            for c in temp:
+                old_len = len(new_cluster)
+                unassigned = np.where(~assigned)[0]
+                nearest_neighbors = unassigned[np.argsort([adj[c, i] for i in unassigned])[:n]]
+                for nn in nearest_neighbors:
+                    if not assigned[nn]:
+                        new_cluster.append(nn)
+                        assigned[nn] = True
+                if len(new_cluster) == old_len:
+                    break
+            clusters.append(new_cluster)
+        # Compute cluster diameters and determine rho
+        diameters = [max([adj[i, j] for i in c for j in c if i != j]) if len(c) > 1 else 0 for c in clusters]
+        rho = np.mean(diameters) / 2 if diameters else 0
+        # Form adjacency matrix with nodes within `rho` of a warehouse
+        final_adj = np.zeros((ccount, ccount))
+        for i in range(ccount):
+            for j in range(ccount):
+                if np.any([np.linalg.norm(clocs[i] - w) < rho for w in wlocs]) and np.any([np.linalg.norm(clocs[j] - w) < rho for w in wlocs]):
+                    final_adj[i, j] = 1
+        # Add negative samples
+        count_positives = np.sum(final_adj == 1)
+        count_negatives = 0
+        while count_negatives < count_positives:
+            i_rand, j_rand = np.random.randint(0, ccount), np.random.randint(0, ccount)
+            if adj[i_rand, j_rand] > rho and final_adj[i_rand, j_rand] == 0:
+                final_adj[i_rand, j_rand] = -1
+                count_negatives += 1
+        # Convert adjacency matrix to edge indices
+        edges = utils.dense_to_sparse(torch.tensor(final_adj, dtype=torch.float))[0]
+        return edges, rho
     
     def c2s_h(self):
         order = self.orders[0]
@@ -167,7 +208,7 @@ class Environment():
     def compute_c2s_reward(self, optimized_tour, id):
         # organise into sub-tours
         tours = {}
-        for act ion in optimized_tour:
+        for action in optimized_tour:
             vehicle_id, customer_id = action
             if vehicle_id not in tours:
                 tours[vehicle_id] = []
@@ -676,9 +717,9 @@ class Environment():
         # iterate through the list of unassigned customers and use c2s to decide the assignment
 
         c2s_tuples = []
-        for order in self.orders:
+        for order in self.orders.copy():
             state = self.get_c2s_observation()
-            id = order['id']
+            id = order['id'] 
             if order['assignment'] == 0:
                 action = self.c2s_l()
                 self.c2s_step(action)
@@ -713,20 +754,18 @@ class Environment():
         
         # generate new customers
         num_customers = np.random.randint(200, 300)
-        new_customers = [Customer(i, arrival=self.env_time) for i in range(num_customers)]
+        new_customers = [Customer(i, arrival=self.env_time) for i in range(num_customers)] # !CHANGE len(self.state['customers']) + i 
         self.orders += new_customers
         self.state['customers'] += new_customers 
         # self.gae_embeddings = np.random.rand(len(self.state['customers']), 2)
 
-        # gae customer locations 
         clocs = np.array([c.location for c in self.state["customers"]])
-        edges = self._generate_edges(len(self.state["customers"]))
+        wlocs = np.array([w['location'] for w in self.state['warehouses']])
+        customer_edges, rho = self._generate_edges(clocs, wlocs, n=5)
 
-        # Update embeddings using GAE
         customer_features = torch.tensor(clocs, dtype=torch.float)
         with torch.no_grad():
-            self.gae_embeddings = self.gae_model.encode(customer_features, edges).numpy()
-
+            self.gae_embeddings = self.gae_model.encode(customer_features, customer_edges).numpy()
         
         return c2s_return, vrp_reward
 
