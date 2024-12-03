@@ -225,6 +225,9 @@ class Environment():
         tours = optimized_tour
 
         rewards = {}
+        Li = {}
+        Di = {}
+        Ui = {}
         for vehicle_id, _ in tours.items():
             c_list = [self.state['customers'][c_id] for c_id in tours[vehicle_id]]
             # compute tour distance for L
@@ -260,8 +263,11 @@ class Environment():
                 if F[i] == 0: r_c -= 10
                 r_c = r_c * (self.gamma**c.deferred)
                 rewards[c.id] = r_c
-
-        return rewards
+                Li[c.id] = L
+                Di[c.id] = D[i]
+                Ui[c.id] = U
+        
+        return rewards, Li, Di, Ui
 
 
 
@@ -665,7 +671,7 @@ class Environment():
         tours = optimized_tour
 
         # compute the reward for each sub-tour
-        tuples = []
+        warehouse_trav = []
         for vehicle_id, _ in tours.items():
             # implement sub-tour
             vehicle_list = []
@@ -700,9 +706,9 @@ class Environment():
                 state = self.vrp_step((vehicle_id, c.id), id)
                 reward = ((rho - d_p[i]) / d_max) + ((self.T - t_p[i]) / t_max) + (self.gamma**(len(c_list) - i) * r_term)
                 vehicle_list.append((state, (vehicle_id, c.id), reward))
-            tuples.append(vehicle_list)
+            warehouse_trav.append(vehicle_list)
 
-        return tuples
+        return warehouse_trav
 
 
     def env_step(self, epsilon_vrp):
@@ -750,14 +756,18 @@ class Environment():
                 optimized_tour = self.get_current_tour(i)
 
             # compute reward using optimized_tour
-            c2s_reward = self.compute_c2s_reward(optimized_tour, i)
+            c2s_reward,Li, Di, Ui = self.compute_c2s_reward(optimized_tour, i)
             for c in c2s_tuples:
                 if self.state['customers'][c[2]].assignment == i:
                     if self.vrp == 0 and c[2] in unserved:
                         rew = -10 * (self.gamma**self.state['customers'][c[2]].deferred)
                     else:
-                        rew = c2s_reward[c[2]]
-                    c2s_return.append((c[0], c[1], rew))
+                        rew_c2s = c2s_reward[c[2]]
+                    li_c2s = Li[c[2]]
+                    di_c2s = Di[c[2]]
+                    ui_c2s = Ui[c[2]]
+
+                    c2s_return.append((c[0], c[1], rew_c2s, li_c2s, di_c2s, ui_c2s))
             vrp_reward = self.compute_vrp_reward(optimized_tour, i)
             vrp_return.append(vrp_reward)
 

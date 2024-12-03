@@ -48,7 +48,13 @@ replay_buffer_vrp = ReplayBuffer_vrp(VRP_BUFFER_CAPACITY)
 
 c2s_flag = 0
 vrp_flag = 0
-
+c2s_rew_per_episode = []
+D_per_episode = []
+L_per_episode = []
+U_per_episode = []
+vrp_rew_per_episode = []
+vehicles_per_episode = []
+customers_per_vehicle_per_episode = []
 # Training loop for DQN with delayed rewards
 epsilon = VRP_EPSILON_START  # Initial exploration rate
 for episode in range(EPISODES):
@@ -66,8 +72,41 @@ for episode in range(EPISODES):
         env = Environment(0, 0)
 
     # T = 0
-    for time_step in range(5):
+    d_for_ep = 0
+    l_for_ep = 0
+    u_for_ep = 0 
+    vrprew_for_ep = 0
+    c2srew_for_ep = 0 
+    vehicles_for_ep = 0
+    cust_per_veh_for_ep = 0 
+
+    time_steps = 5
+    for time_step in range(time_steps):
         c2s_rewards, vrp_rewards = env.env_step(epsilon) 
+        # c2s_rewards -> list of (agent) ->  (c[0], c[1], rew_c2s, li_c2s, di_c2s, ui_c2s)
+        # vrp_rewards -> list of -> [[(state, (vid, cid), reward), (), ()], []] 
+        # vrp rewards -> list of (agent) -> for each agent, list of vehicle routes -> 
+        #              -> list of (state, (vid, cid), reward) for each cust 
+
+        for c2s_tuple in c2s_rewards:
+            _, _, rew_c2s, li_c2s, di_c2s, ui_c2s = c2s_tuple
+            c2srew_for_ep += rew_c2s
+            l_for_ep += li_c2s
+            d_for_ep += di_c2s
+            u_for_ep += ui_c2s
+        
+        for agent_vrp in vrp_rewards:
+            for vehicle in agent_vrp: 
+                for _, _, reward in vehicle:
+                    vrprew_for_ep += reward
+        
+        # Handle number of vehicles
+        num_vehicles = sum(len(warehouse['vehicles']) for warehouse in env.state['warehouses'])
+        vehicles_for_ep += num_vehicles
+
+        customers_per_vehicle = sum(len(vehicle.customers) for warehouse in env.state['warehouses'] for vehicle in warehouse['vehicles'])
+        cust_per_veh_for_ep += customers_per_vehicle
+        # ------------------------------------------------------------------
 
     # while not done:
     #     # Epsilon-greedy policy
@@ -144,7 +183,24 @@ for episode in range(EPISODES):
             loss.backward()
             optimizer_vrp.step()
             vrp_episode_loss += loss.item()
+    
+    # scaling by number of customers in this episode 
+    c2srew_for_ep = c2srew_for_ep/len(env.state['customers'])
+    d_for_ep = d_for_ep/len(env.state['customers'])
+    l_for_ep = l_for_ep/len(env.state['customers'])
+    u_for_ep = u_for_ep/len(env.state['customers'])
+    vrprew_for_ep = vrprew_for_ep/len(env.state['customers']) 
 
+    # averaging out for time steps ..... 
+    c2s_rew_per_episode.append(c2srew_for_ep/time_steps)
+    D_per_episode.append(d_for_ep/time_steps)
+    L_per_episode.append(l_for_ep/time_steps)
+    U_per_episode.append(u_for_ep/time_steps)
+    vrp_rew_per_episode.append(vrprew_for_ep/time_steps)
+
+    vehicles_per_episode.append(vehicles_for_ep/time_steps)
+    customers_per_vehicle_per_episode.append(cust_per_veh_for_ep/time_steps)
+    
     # Log progress
     print(f"Episode {episode + 1}, c2s_Loss: {0}, vrp_Loss: {vrp_episode_loss}")
     epsilon = max(0.0, epsilon * VRP_EPSILON_DECAY)
