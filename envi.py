@@ -140,13 +140,13 @@ class Environment():
     def c2s_h(self):
         order = self.orders[0]
         action = 0
-        if order['assignment'] == 0:
+        if order.assignment == 0: #!change 
             distances = []
             for warehouse in self.state['warehouses']:
-                distances.append(np.linalg.norm(np.array(warehouse['location']) - np.array(order['location'])))
+                distances.append(np.linalg.norm(np.array(warehouse['location']) - np.array(order.location))) #!change
             indices = np.argsort(distances)
             for i in indices:
-                if self.state['warehouses'][i]['inventory'] >= order['demand']:
+                if self.state['warehouses'][i]['inventory'] >= order.demand: #!change
                     action = self.state['warehouses'].index(self.state['warehouses'][i]) + 1
                     break
             else:
@@ -194,13 +194,13 @@ class Environment():
         # action is the warehouse to assign the customer to
         # action = 0 means defer
         order = self.orders[0]
-        order['assignment'] = action
+        order.assignment = action #!change
         if action == 5:
-            order['deferred'] += 1
+            order.deferred += 1 #!change
         else:
-            self.state['warehouses'][action-1]['inventory'] -= order['demand']
-            order['deferred'] = 0
-        if order['deferred'] > 0:
+            self.state['warehouses'][action-1]['inventory'] -= order.demand #!change
+            order.deferred = 0 #!change
+        if order.deferred > 0: #!change
             self.orders.append(order)
         self.orders = self.orders[1:]
         return self._get_c2s_observation()
@@ -723,8 +723,8 @@ class Environment():
         c2s_tuples = []
         for order in self.orders.copy():
             state = self.get_c2s_observation()
-            id = order['id'] 
-            if order['assignment'] == 0:
+            id = order.id #!change 
+            if order.assignment == 0: #!change
                 action = self.c2s_l()
                 self.c2s_step(action)
                 c2s_tuples.append((state, action, id))
@@ -753,12 +753,12 @@ class Environment():
 
         # set the customers who've been deferred back to unasigned
         for order in self.orders:
-            if order['assignment'] == 5:
-                order['assignment'] = 0
+            if order.assignment == 5: #!change
+                order.assignment = 0 #!change
         
         # generate new customers
         num_customers = np.random.randint(200, 300)
-        new_customers = [Customer(i, arrival=self.env_time) for i in range(num_customers)] # !CHANGE len(self.state['customers']) + i 
+        new_customers = [Customer(len(self.state['customers']) + i, arrival=self.env_time) for i in range(num_customers)] # !change
         self.orders += new_customers
         self.state['customers'] += new_customers 
         # self.gae_embeddings = np.random.rand(len(self.state['customers']), 2)
