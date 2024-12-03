@@ -197,7 +197,7 @@ class Environment():
         self.cluster_info = [{}, {}, {}, {}]
 
         for c in customers:
-            if c.deferred == 0 and c.vehicle_id == -1:
+            if c.vehicle_id == -1 and c.assigned != 5:
                 c.arrival = self.env_time
 
         for i in range(4):
@@ -430,7 +430,7 @@ class Environment():
         self.vrp_actions[i] = self.compute_feasible_actions(i)
         estimated_Qs = []
 
-        # finding the rop k actions
+        # finding the top k actions
         for action in self.vrp_actions[i]:
             # save state and other details that change during action
             temp_state = self.vrp_states[i]
@@ -477,12 +477,10 @@ class Environment():
         
         # need helper to compute the distance of the path
         for j in range(self.kappa):
-            distances[j] = self.compute_distance(paths[j])
+            distances[j] = self.compute_distance(i, paths[j])
             
         # action with lowest distance is selected
         index = np.argmin(distances)
-        
-        # should we check if vehicle leaved depot (to spawn new) before or after sat?
 
         # use helper to get path in format for forward sat
         # returns a list of tours for each vehicle 
@@ -492,6 +490,14 @@ class Environment():
         self.vrp_step(paths[index][0], i)
 
         # check if this vehicle has any feasible actions left. If not, it leaves the depot and a new one is spawned
+        vehicle_fesible = self.compute_feasible_actions(i)
+        feasible = False
+        for action in vehicle_fesible:
+            vid, cid = action
+            if vid == paths[index][0][0]: feasible = True
+        if feasible == False:
+            v = Vehicle(len(self.state['warehouses'][id]['vehicles']), self.state['warehouses'][id]['location'], self.vehicle_cap, self.env_time)
+            self.state['warehouses'][i]['vehicles'].append(v)
 
         return optimized_tour
 
@@ -543,27 +549,28 @@ class Environment():
             if order['assignment'] == 0:
                 action = self.c2s_h()
                 self.c2s_step(action)
-        
-        # set the customers who've been deferred back to unasigned
-        for order in self.orders:
-            if order['assignment'] == 5:
-                order['assignment'] = 0
-                
+
+
         # execute the vrp agent
-        customer_list = [customer for customer in self.state['customers'] if (customer.vehicle_id == -1 and customer.deferred == 0)]
-        
+        customer_list = [customer for customer in self.state['customers'] if (customer.vehicle_id == -1 and customer.deferred != 5)]
+
         for i in range(4):
             self.vrp_init(customer_list)
             # iterate while customers are left without vehicle assignment
             while len([customer for customer in customer_list if customer.assignment == i + 1 and customer.vehicle_id == -1]) > 0:
                 optimized_tour = self.vrp_episode(i)
-        
+
         # compute reward using optimized_tour
         c2s_reward = self.compute_c2s_reward(optimized_tour)
         vrp_reward = self.compute_vrp_reward(optimized_tour)
         
         # increment environment time
         self.env_time += self.T
+
+        # set the customers who've been deferred back to unasigned
+        for order in self.orders:
+            if order['assignment'] == 5:
+                order['assignment'] = 0
         
         # generate new customers
         num_customers = np.random.randint(200, 301)
@@ -573,6 +580,13 @@ class Environment():
         self.gae_embeddings = np.random.rand(len(self.state['customers']), 2)
         
         pass
+
+    def compute_distance(self, i, path):
+        distance = np.linalg.norm(np.array(self.state['warehouses'][i]['location']) - np.array(self.state['customers'][path[0][1]].location))
+        for j in range(1, len(path)):
+            distance += self.Euclidean_CC(path[j-1][1], path[j][1])
+        distance += np.linalg.norm(np.array(self.state['warehouses'][i]['location']) - np.array(self.state['customers'][path[-1][1]].location))
+        return distance
 
 
     def Euclidean_CC(self, i, j):
