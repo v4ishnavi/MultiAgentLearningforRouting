@@ -231,19 +231,21 @@ class Environment():
 
                 if i == 0:
                     t_p = D[0] / self.state['warehouses'][id]['vehicles'][vehicle_id].speed
-                else:
-                    t_p = self.Euclidean_CC(c_list[i-1].id, c.id) / self.state['warehouses'][id]['vehicles'][vehicle_id].speed
-
-                if time + t_p <= c.time_window[1]:
-                    F.append(1)
-                    if i == 0:
+                    if time + t_p <= c.time_window[1]:
+                        F.append(1)
                         time = min(c.time_window[0], time + t_p) + self.service_time
                     else:
-                        time = time + t_p + self.service_time
+                        F.append(0)
+                        time = time + t_p
                 else:
-                    F.append(0)
-                    time = time + t_p
-            
+                    t_p = self.Euclidean_CC(c_list[i-1].id, c.id) / self.state['warehouses'][id]['vehicles'][vehicle_id].speed
+                    if time + t_p >= c.time_window[0] and time + t_p <= c.time_window[1]:
+                        F.append(1)
+                        time = time + t_p + self.service_time
+                    else:
+                        F.append(0)
+                        time = time + t_p
+
                 r_c = (-1*(D[i] + L)) + F[i] - U
                 if F[i] == 0: r_c -= 10
                 r_c = r_c * (self.gamma**c.deferred)
@@ -555,10 +557,12 @@ class Environment():
         for action in self.vrp_actions[i]:
             # save state and other details that change during action
             temp_state = self.vrp_states[i]
-            vehicle_id, customer_id = action
             temp_vehicle = self.state['warehouses'][i]['vehicles'][vehicle_id]
+
+            vehicle_id, customer_id = action
             new_state = self.vrp_step(action, i)
             estimated_Qs.append(self.vrp_l(new_state))
+
             # restore the state
             self.vrp_states[i] = temp_state
             self.state['warehouses'][i]['vehicles'][vehicle_id] = temp_vehicle
@@ -607,13 +611,13 @@ class Environment():
         else:
             index = np.argmin(distances)
 
-        # use helper to get path in format for forward sat
-        # returns a list of tours for each vehicle 
-        optimized_tour = self.get_optimized_tour(i, paths[index]) 
-        
         # should use optimised_sub_tour 
         self.vrp_step(paths[index][0], i)
 
+        # use helper to get path in format for forward sat
+        # returns a list of tours for each vehicle 
+        optimized_tour = self.get_optimized_subtour(i, paths[index][0][0])  # forward SAT
+        
         # check if this vehicle has any feasible actions left. If not, it leaves the depot and a new one is spawned
         vehicle_fesible = self.compute_feasible_actions(i)
         feasible = False
@@ -626,45 +630,6 @@ class Environment():
 
         return optimized_tour
 
-
-    # def compute_vrp_reward(self, optimized_tour, id):
-    #     # organise into sub-tours
-    #     tours = {}
-    #     for action in optimized_tour:
-    #         vehicle_id, customer_id = action
-    #         if vehicle_id not in tours:
-    #             tours[vehicle_id] = []
-    #         tours[vehicle_id].append(customer_id)
-
-    #     # compute the reward for each sub-tour
-    #     rewards = []
-    #     for vehicle_id, _ in tours.items():
-    #         c_list = [self.state['customers'][c_id] for c_id in tours[vehicle_id]]
-    #         d_p = []
-    #         t_p = []
-    #         d_max, t_max = 0, 0
-
-    #         prev_loc = self.state['warehouses'][id]['location']
-    #         for c in c_list:
-    #             d_p.append(np.linalg.norm(np.array(prev_loc) - np.array(c.location)))
-    #             t_p.append(d_p / self.state['warehouses'][id]['vehicles'][vehicle_id].speed)
-    #             prev_loc = c.location
-
-    #         # return to the warehouse
-    #         d_p.append(np.linalg.norm(np.array(prev_loc) - np.array(self.state['warehouses'][vehicle_id]['location'])))
-    #         t_p.append(d_p / self.state['warehouses'][id]['vehicles'][vehicle_id].speed)
-    #         d_max = max(d_p)
-    #         t_max = max(t_p)
-
-    #         r = 0
-    #         rho = self.cluster_info[id]['rho']
-    #         r_term = (2 * rho) - (sum(d_p)*1/len(d_p))
-    #         for i in range(len(c_list)):
-    #             r += ((rho - d_p[i]) / d_max) + ((self.T - t_p[i]) / t_max) + (self.gamma**(len(c_list) - i) * r_term)
-    #         rewards.append(r)
-
-    #     # return the sum of the rewards
-    #     return sum(rewards)
 
 
     def compute_vrp_reward(self, optimized_tour, id):
@@ -780,6 +745,80 @@ class Environment():
             distance += self.Euclidean_CC(path[j-1][1], path[j][1])
         distance += np.linalg.norm(np.array(self.state['warehouses'][i]['location']) - np.array(self.state['customers'][path[-1][1]].location))
         return distance
+
+
+    def get_optimized_subtour(self, i, v_id):
+        # find dmax
+        c_list = self.state['warehouses'][i]['vehicles'][v_id].customers
+        dmax = np.linalg.norm(np.array(self.state['warehouses'][i]['location']) - np.array(self.state['customers'][c_list[0]].location))
+        for j in range(1, len(c_list)):
+            dmax = max(dmax, np.linalg.norm(np.array(self.state['customers'][c_list[j-1]].location) - np.array(self.state['customers'][c_list[j]].location)))
+        
+        # opportunistic customers: find unserved customers in same cluster, and pick 3 randomly
+        unserved = [c.id for c in self.state['customers'] if c.vehicle_id == -1 and c.deferred != 5 and c.cluster == self.state['customers'][c_list[0]].cluster]
+        added = random.sample(unserved, min(3, len(unserved)))
+
+        # make list of locations
+        customers_R = [c.location for c in self.state['customers'] if c.id in c_list]
+        customers_A = [c.location for c in self.state['customers'] if c.id in added]
+        depot = self.state['warehouses'][i]['location']
+
+        # find the optimal tour
+        tour = optimize_route(customers_R, customers_A, depot, dmax, 1)
+
+        # rearrange c accordig to the indexing in tour
+        c_list = c_list + added
+        new_c_list = [c_list[i] for i in tour]
+
+        # update vehicle
+        vehicle = self.state['warehouses'][i]['vehicles'][v_id]
+        vehicle.customers = new_c_list
+        vehicle.current_cap = sum([self.state['customers'][c].demand for c in new_c_list])
+        vehicle.location = self.state['customers'][new_c_list[-1]].location
+        # update availability
+        vehicle.available = self.env_time
+        for i, c in enumerate(new_c_list):
+            if i == 0:
+                dist = np.linalg.norm(np.array(self.state['warehouses'][i]['location']) - np.array(self.state['customers'][c].location))
+                time = dist / vehicle.speed
+                if time + self.env_time <= self.state['customers'][c].time_window[1]:
+                    vehicle.available = min(self.state['customers'][c].time_window[0], self.env_time) + self.service_time
+                else:
+                    vehicle.available += time
+            else:
+                dist = self.Euclidean_CC(new_c_list[i-1], c)
+                time = dist / vehicle.speed
+                if (time + vehicle.available <= self.state['customers'][c].time_window[1] and 
+                    time + vehicle.available >= self.state['customers'][c].time_window[0]):
+                    vehicle.available += time + self.service_time
+                else:
+                    vehicle.available += time
+        self.state['warehouses'][i]['vehicles'][v_id] = vehicle
+
+
+    def optimise_tour(self, optimised_tour, id): # tightening sat
+        tours = {}
+        for action in optimised_tour:
+            vehicle_id, customer_id = action
+            if vehicle_id not in tours:
+                tours[vehicle_id] = []
+            tours[vehicle_id].append(customer_id)
+        
+        for vehicle_id, _ in tours.items():
+            c_list = tours[vehicle_id]
+            d_max = np.linalg.norm(np.array(self.state['warehouses'][id]['location']) - np.array(self.state['customers'][c_list[0]].location))
+            for j in range(1, len(c_list)):
+                d_max = max(d_max, np.linalg.norm(np.array(self.state['customers'][c_list[j-1]].location) - np.array(self.state['customers'][c_list[j]].location)))
+            
+            customers_R = [self.state['customers'][c].location for c in c_list]
+            depot = self.state['warehouses'][id]['location']
+
+            # find the optimal tour
+            tour = optimize_route(customers_R, [], depot, d_max, 5)
+
+            # rearrange c according to the indexing in tour
+            new_c_list = [c_list[i] for i in tour]
+            self.state['warehouses'][id]['vehicles'][vehicle_id].customers = new_c_list
 
 
     def Euclidean_CC(self, i, j):
