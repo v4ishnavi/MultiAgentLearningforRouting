@@ -1,6 +1,7 @@
 import numpy as np 
 import random
 import torch
+from gae import GraphAutoEncoder
 
 class Customer():
     def __init__(self, id, arrival, T=100, SAT=False):
@@ -31,7 +32,8 @@ class Vehicle():
 
 
 class Environment():
-    def __init__(self, vrp=1, c2s=1, dqn_c2s=None, dqn_vrp=None):
+    def __init__(self, vrp=1, c2s=1, dqn_c2s=None, dqn_vrp=None, 
+    gae_model_path = "model.pt"):
         self.vrp = vrp
         self.c2s = c2s
         self.dqn_c2s = dqn_c2s
@@ -47,6 +49,14 @@ class Environment():
         self.env_time = 0
         self.service_time = 1
         self.gamma = 0.9
+        self.gae_input_dim = 2 
+        self.gae_output_dim = 2 
+        self.gae_hidden_dim = 16
+        self.gae_model_path = gae_model_path
+
+        self.gae_model = GraphAutoEncoder(self.gae_input_dim, self.gae_output_dim, self.hidden_dim)
+        self.gae_model.load_state_dict(torch.load(self.gae_model_path))
+        self.gae_model.eval()
     
     def initialize_environment(self):
         num_customers = np.random.randint(200, 301)
@@ -61,16 +71,30 @@ class Environment():
         }
 
         # init gae_embeddings
-        self.gae_embeddings = np.random.rand(len(env_info['customers']), 2)
+        customer_features = torch.tensor([[c.location[0], c.location[1]] for c in env_info['customers']], dtype=torch.float)
+        customer_edges = self._generate_edges(num_customers) 
+        with torch.no_grad():
+            self.gae_embeddings = self.gae_model.encode(customer_features, customer_edges).numpy()
+        # self.gae_embeddings = np.random.rand(len(env_info['customers']), 2)
         self.env_info = env_info   
         self.orders = [env_info['customers'][i] for i in range(len(env_info['customers']))] 
         
         return env_info
     
-    def time_step(self):
-        # need to generate new customers
-        # after generating, pass the new list of customers to the gae and update embeddings
-        pass
+    # def time_step(self):
+    #     # need to generate new customers
+    #     # after generating, pass the new list of customers to the gae and update embeddings
+
+    #     pass
+
+    def _generate_edges(self, num_nodes):
+        edge_index = []
+        for i in range(num_nodes):
+            for j in range(i + 1, num_nodes):
+                edge_index.append([i, j])
+                edge_index.append([j, i])
+        return torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+        # 
     
     def c2s_h(self):
         order = self.orders[0]
@@ -143,7 +167,7 @@ class Environment():
     def compute_c2s_reward(self, optimized_tour, id):
         # organise into sub-tours
         tours = {}
-        for action in optimized_tour:
+        for act ion in optimized_tour:
             vehicle_id, customer_id = action
             if vehicle_id not in tours:
                 tours[vehicle_id] = []
@@ -688,11 +712,21 @@ class Environment():
                 order['assignment'] = 0
         
         # generate new customers
-        num_customers = np.random.randint(200, 301)
+        num_customers = np.random.randint(200, 300)
         new_customers = [Customer(i, arrival=self.env_time) for i in range(num_customers)]
         self.orders += new_customers
-        self.state['customers'] += new_customers
-        self.gae_embeddings = np.random.rand(len(self.state['customers']), 2)
+        self.state['customers'] += new_customers 
+        # self.gae_embeddings = np.random.rand(len(self.state['customers']), 2)
+
+        # gae customer locations 
+        clocs = np.array([c.location for c in self.state["customers"]])
+        edges = self._generate_edges(len(self.state["customers"]))
+
+        # Update embeddings using GAE
+        customer_features = torch.tensor(clocs, dtype=torch.float)
+        with torch.no_grad():
+            self.gae_embeddings = self.gae_model.encode(customer_features, edges).numpy()
+
         
         return c2s_return, vrp_reward
 
