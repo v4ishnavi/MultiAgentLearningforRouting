@@ -130,10 +130,54 @@ class Environment():
         self.orders = self.orders[1:]
         return self._get_c2s_observation()
     
-    def compute_c2s_reward(self, optimized_tour):
-        pass
-    
-    
+    def compute_c2s_reward(self, optimized_tour, id):
+        # organise into sub-tours
+        tours = {}
+        for action in optimized_tour:
+            vehicle_id, customer_id = action
+            if vehicle_id not in tours:
+                tours[vehicle_id] = []
+            tours[vehicle_id].append(customer_id)
+
+        rewards = []
+        for vehicle_id, _ in tours.items():
+            c_list = [self.state['customers'][c_id] for c_id in tours[vehicle_id]]
+            # compute tour distance for L
+            path = [(vehicle_id, c_id) for c_id in tours[vehicle_id]]
+            L = self.compute_distance(id, path) / (len(c_list) * 282.84)
+
+            # proportion of empty space at the beginning
+            U = 1 - sum([self.state['customers'][c_id].demand for c_id in tours[vehicle_id]]) / self.vehicle_cap
+
+            D, F = [], []
+            time = self.env_time
+            for i, c in enumerate(c_list):
+                D.append(np.linalg.norm(np.array(c.location) - np.array(self.state['warehouses'][id]['location'])))
+
+                if i == 0:
+                    t_p = D[0] / self.state['warehouses'][id]['vehicles'][vehicle_id].speed
+                else:
+                    t_p = self.Euclidean_CC(c_list[i-1].id, c.id) / self.state['warehouses'][id]['vehicles'][vehicle_id].speed
+
+                if time + t_p <= c.time_window[1]:
+                    F.append(1)
+                    if i == 0:
+                        time = min(c.time_window[0], time + t_p) + self.service_time
+                    else:
+                        time = time + t_p + self.service_time
+                else:
+                    F.append(0)
+                    time = time + t_p
+            
+                r_c = (-1*(D[i] + L)) + F[i] - U
+                if F[i] == 0: r_c -= 10
+                r_c = r_c * (self.gamma**c.deferred)
+                rewards.append((c.id, r_c))
+
+        return rewards
+
+
+
     def vrp_h(self, id, customers):
         customers = [customer for customer in customers if customer['assignment'] == id + 1]
 
