@@ -546,7 +546,7 @@ class Environment():
         self.vrp_states[id] = action_vector
         return action_vector
     
-    def vrp_episode(self, i):
+    def vrp_episode(self, i, epsilon):
         self.vrp_actions[i] = self.compute_feasible_actions(i)
         estimated_Qs = []
 
@@ -600,7 +600,11 @@ class Environment():
             distances[j] = self.compute_distance(i, paths[j])
             
         # action with lowest distance is selected
-        index = np.argmin(distances)
+        # implement epsilon greedy
+        if random.random() < epsilon:
+            index = random.randint(0, self.kappa - 1)
+        else:
+            index = np.argmin(distances)
 
         # use helper to get path in format for forward sat
         # returns a list of tours for each vehicle 
