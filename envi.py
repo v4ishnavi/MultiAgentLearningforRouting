@@ -6,7 +6,7 @@ from gae import GraphAutoEncoder
 class Customer():
     def __init__(self, id, arrival, T=100, SAT=False):
         self.id = id
-        self.location = (np.random.uniform(-100, 100), np.random.uniform(-100, 100))
+        self.location = (np.random.uniform(-100, 100), np.random.uniform(-100, 100)) #!change TO numpy array??
         self.demand = np.random.randint(1, 11)
         self.time_window = (np.random.randint(T // 5, 4 *(T //5)), 0)
         self.time_window = (self.time_window[0], self.time_window[0] + np.random.randint(T // 10, 2 * T))
@@ -38,7 +38,7 @@ class Environment():
         self.c2s = c2s
         self.dqn_c2s = dqn_c2s
         self.dqn_vrp = dqn_vrp
-        self.state = self._initialize_environment()
+        self.state = self.initialize_environment() #!change
         self.orders = []
         self.tau = 1000
         self.T = 100
@@ -54,14 +54,14 @@ class Environment():
         self.gae_hidden_dim = 16
         self.gae_model_path = gae_model_path
 
-        self.gae_model = GraphAutoEncoder(self.gae_input_dim, self.gae_output_dim, self.hidden_dim)
+        self.gae_model = GraphAutoEncoder(self.gae_input_dim, self.gae_output_dim, self.gae_hidden_dim)
         self.gae_model.load_state_dict(torch.load(self.gae_model_path))
         self.gae_model.eval()
     
     def initialize_environment(self):
         num_customers = np.random.randint(200, 300)
         env_info = {
-            "warehouses": [
+            "warehouses": [ #!change locations to numpy arrays? 
                 {"location": (50, 50), "inventory": self.P_0max, "vehicles": []},
                 {"location": (50, -50), "inventory": self.P_0max, "vehicles": []},
                 {"location": (-50, -50), "inventory": self.P_0max, "vehicles": []},
@@ -166,7 +166,7 @@ class Environment():
     def get_c2s_observation(self):
         # The state for the c2s agent is the 19 state table in the paper
         observation = []
-        customers_id = self.orders[0]['id']
+        customers_id = self.orders[0].id #!change
         observation.append(self.gae_embeddings[customers_id][0])
         observation.append(self.gae_embeddings[customers_id][1])
         # compute the distance between the customer and the warehouse(not saving any time by doing this earlier)
@@ -203,7 +203,7 @@ class Environment():
         if order.deferred > 0: #!change
             self.orders.append(order)
         self.orders = self.orders[1:]
-        return self._get_c2s_observation()
+        return self.get_c2s_observation() #!change from internal to external class fn
     
     def compute_c2s_reward(self, optimized_tour, id):
         # organise into sub-tours
@@ -254,7 +254,7 @@ class Environment():
 
 
     def vrp_h(self, id, customers):
-        customers = [customer for customer in customers if customer['assignment'] == id + 1]
+        customers = [customer for customer in customers if customer.assignment == id + 1] #!change dict to class not
 
         # Sort the assigned customers at the warehouse according to their time window opening.
         customers = sorted(customers, key=lambda x: x.time_window[0])
@@ -316,12 +316,13 @@ class Environment():
         self.cluster_info = [{}, {}, {}, {}]
 
         for c in customers:
-            if c.vehicle_id == -1 and c.assigned != 5:
+            if c.vehicle_id == -1 and c.assignment != 5: #!change
                 c.arrival = self.env_time
 
         for i in range(4):
             clocs = [customer.location for customer in customers if customer.assignment == i + 1 and customer.cluster == None]
-            c_idx = [customer.id for customer in customers if customer.assignment == i + 1 and customer.cluster == None]
+            c_idx = [customer.id for customer in customers if customer.assignment == i + 1 and customer.cluster == None] 
+            #!change : gptprev asking to store customers in cidx??
             cluster_indices, centroids, radii, rho = self._vrp_cluster_gen(clocs, 10, self.state['warehouses'][i]['location'])
             for c in c_idx:
                 customers[c].cluster = cluster_indices[c]
@@ -394,7 +395,7 @@ class Environment():
     def compute_feasible_actions(self, vrp_id):
         # find the list of vehicles and customers
         vehicles = self.state['warehouses'][vrp_id]['vehicles']
-        customers = [customer for customer in self.state['customers'] if customer['assignment'] == vrp_id + 1] # customer.vehicle_id == -1
+        customers = [customer for customer in self.state['customers'] if customer.assignment == vrp_id + 1] # customer.vehicle_id == -1 !change
 
         # find the feasible actions
         # check distance between each vehicle and customer
@@ -784,9 +785,9 @@ class Environment():
     def Euclidean_CC(self, i, j):
         customer_i = self.state['customers'][i].location
         customer_j = self.state['customers'][j].location
-        return np.linalg.norm(np.array(customer_i.location) - np.array(customer_j.location))
+        return np.linalg.norm(np.array(customer_i) - np.array(customer_j)) #!change
 
     def Euclidean_CV(self, c, w, v): # customer, warehouse, vehicle
         customer = self.state['customers'][c].location
         vehicle = self.state['warehouses'][w]['vehicles'][v].location
-        return np.linalg.norm(np.array(customer.location) - np.array(vehicle.location))
+        return np.linalg.norm(np.array(customer) - np.array(vehicle)) #!change 
