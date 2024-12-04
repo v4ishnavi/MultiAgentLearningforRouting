@@ -330,8 +330,8 @@ class Environment():
         return tour, unserved
 
     def vrp_l(self, state):
-        self.dqn_vrp.eval()
-        return self.dqn_vrp(state)
+        with torch.no_grad():
+            return self.dqn_vrp(torch.tensor(state))
 
     def vrp_init(self, customer_ids):
         # set up one agent for each warehouse
@@ -475,6 +475,9 @@ class Environment():
                 else:
                     if self.Euclidean_CV(cu.id, id, vehicle_id) < self.Euclidean_CV(cust_non_d.id, id, vehicle_id):
                         cust_non_d = cu
+        if non_d == np.inf:
+            non_d = 0
+
 
         if not ngb:
             for cidx in customer_list:
@@ -564,7 +567,7 @@ class Environment():
             vehicle.available = max(customer.time_window[0], self.env_time + self.Euclidean_CV(customer_id, id, vehicle_id) / vehicle.speed) + self.service_time
         else:
             vehicle.available += ((self.Euclidean_CV(customer_id, id, vehicle_id) / vehicle.speed) + self.service_time)
-        vehicle.customers.append(customer)
+        vehicle.customers.append(customer.id)
         vehicle.current_cap += customer.demand
         customer.vehicle_id = vehicle_id
         vehicle.location = customer.location
@@ -576,7 +579,9 @@ class Environment():
         return action_vector
 
     def vrp_episode(self, i, epsilon):
-        self.vrp_actions[i] = self.compute_feasible_actions(i)
+        self.vrp_actions[i] = self.compute_feasible_actions(i)  
+        if len(self.vrp_actions[i]) == 0:
+            return False
         estimated_Qs = []
 
         # finding the top k actions
@@ -588,7 +593,7 @@ class Environment():
             temp_vehicle = self.state['warehouses'][i]['vehicles'][vehicle_id]
 
             new_state = self.vrp_step(action, i)
-            estimated_Qs.append(self.vrp_l(new_state))
+            estimated_Qs.append(self.vrp_l(new_state).cpu().numpy())
 
             # restore the state
             self.vrp_states[i] = temp_state
@@ -596,12 +601,20 @@ class Environment():
             self.state['customers'][customer_id] = temp_customer
 
         # pick the top k actions
-        indices = np.argsort(estimated_Qs)[-self.kappa:]
-        distances = [0 for _ in range(self.kappa)]
-        paths = [[] for _ in range(self.kappa)]
+        if len(estimated_Qs) < self.kappa:
+            indices = np.arange(len(estimated_Qs))
+            distances = [0 for _ in range(len(estimated_Qs))]
+            paths = [[] for _ in range(len(estimated_Qs))]
+        else:
+            indices = np.argsort(estimated_Qs)[-self.kappa:]
+            distances = [0 for _ in range(self.kappa)]
+            paths = [[] for _ in range(self.kappa)]
         # compute distances while doing the rollout
         if random.random() < epsilon:
-            index = random.randint(0, self.kappa - 1)
+            if len(estimated_Qs) < self.kappa:
+                index = random.randint(0, len(estimated_Qs) - 1)
+            else:
+                index = random.randint(0, self.kappa - 1)
             paths[index].append(self.vrp_actions[i][index])
 
         else:
@@ -654,7 +667,7 @@ class Environment():
         # use helper to get path in format for forward sat
         # returns a list of tours for each vehicle 
         
-        self.get_optimized_subtour(i, paths[index][0][0])  # forward SAT
+        # self.get_optimized_subtour(i, paths[index][0][0])  # forward SAT
         
         # check if this vehicle has any feasible actions left. If not, it leaves the depot and a new one is spawned
         vehicle_fesible = self.compute_feasible_actions(i)
@@ -663,8 +676,10 @@ class Environment():
             vid, cid = action
             if vid == paths[index][0][0]: feasible = True
         if feasible == False:
-            v = Vehicle(len(self.state['warehouses'][id]['vehicles']), self.state['warehouses'][id]['location'], self.vehicle_cap, self.env_time)
+            v = Vehicle(len(self.state['warehouses'][i]['vehicles']), self.state['warehouses'][i]['location'], self.vehicle_cap, self.env_time)
             self.state['warehouses'][i]['vehicles'].append(v)
+            
+        return True
 
     def compute_vrp_reward(self, optimized_tour, id):
         # organise into sub-tours
@@ -747,19 +762,34 @@ class Environment():
             # print(i, len(customer_list), len(self.state['customers']))
             # iterate while customers are left without vehicle assignment
             if self.vrp == 1:
-                while len([customer for customer in customer_list if (customer.assignment == i and customer.vehicle_id == -1)]) > 0:
-                    self.vrp_episode(i, epsilon_vrp)
+                counter = 0
+                while len([customer for customer in customer_list if (self.state['customers'][customer].id == i and self.state['customers'][customer].vehicle_id == -1)]) > 0:
+                    value = self.vrp_episode(i, epsilon_vrp)
+                    if value == False:
+                        counter += 1
+                    if counter == 2:
+                        break
                 final_tour = self.get_current_tour(i)
-                optimized_tour = self.optimise_tour(i, final_tour)
+                # optimized_tour = self.optimise_tour(i, final_tour)
+                optimized_tour = final_tour
+                unserved = [c for c in customer_list if self.state['customers'][c].assignment == i and self.state['customers'][c].vehicle_id == -1]
             else:
                 _, unserved = self.vrp_h(i, customer_list)
                 optimized_tour = self.get_current_tour(i)
 
+            # iterate throught the vehicles and delete empty ones
+            for vehicle in self.state['warehouses'][i]['vehicles']:
+                if vehicle.customers == []:
+                    self.state['warehouses'][i]['vehicles'].remove(vehicle)
+                else:
+                    break
+            
+            
             # compute reward using optimized_tour
             c2s_reward,Li, Di, Ui = self.compute_c2s_reward(optimized_tour, i)
             for c in c2s_tuples:
                 if self.state['customers'][c[2]].assignment == i:
-                    if self.vrp == 0 and c[2] in unserved:
+                    if c[2] in unserved:
                         rew_c2s = -10 * (self.gamma**self.state['customers'][c[2]].deferred)
                         li_c2s = 0
                         di_c2s = 0
@@ -808,7 +838,7 @@ class Environment():
         wlocs = np.array([w['location'] for w in self.state['warehouses']])
         customer_edges, _ = self._generate_edges(clocs, wlocs, n=5)
         
-        print(len(self.orders), len(current_customers))
+        # print(len(self.orders), len(current_customers))
         for o in self.orders:
             if self.state['customers'][o].assignment != -1:
                 print('Assigned customer', self.state['customers'][o].assignment, self.state['customers'][o].deferred, self.state['customers'][o].arrival, self.state['customers'][o].vehicle_id)

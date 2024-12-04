@@ -47,7 +47,7 @@ optimizer_vrp = optim.Adam(dqn_vrp.parameters(), lr=C2S_LEARNING_RATE)
 replay_buffer_vrp = ReplayBuffer_vrp(VRP_BUFFER_CAPACITY)
 
 c2s_flag = 0
-vrp_flag = 0
+vrp_flag = 1
 c2s_rew_per_episode = []
 D_per_episode = []
 L_per_episode = []
@@ -65,9 +65,9 @@ for episode in range(EPISODES):
     if c2s_flag and vrp_flag:
         env = Environment(1, 1, dqn_c2s, dqn_vrp)
     elif c2s_flag:
-        env = Environment(1, 0, dqn_c2s, None)
+        env = Environment(0, 1, dqn_c2s, None)
     elif vrp_flag:
-        env = Environment(0, 1, None, dqn_vrp)
+        env = Environment(1, 0, None, dqn_vrp)
     else:
         env = Environment(0, 0)
 
@@ -173,14 +173,25 @@ for episode in range(EPISODES):
             states,rewards = replay_buffer_vrp.sample(BATCH_SIZE)
 
             # Convert to PyTorch tensors
-            states = torch.FloatTensor(states)
+            states = torch.FloatTensor(states).to(device)
+            rewards = torch.FloatTensor(rewards).to(device).reshape(-1, 1)
+            # print(rewards.shape)
+            # print(states[0])
 
             # Compute Q-values and targets
             optimizer_vrp.zero_grad()
             q_values_pred = dqn_vrp(states)
+            # print(q_values_pred)
+            # for name, param in dqn_vrp.named_parameters():
+            #     if param.requires_grad:
+            #         print(name, param.data)
+
             # Compute loss and optimize
             loss = loss_fn(q_values_pred, rewards)
             loss.backward()
+            max_norm = 1.0
+            torch.nn.utils.clip_grad_norm_(dqn_vrp.parameters(), max_norm)
+            
             optimizer_vrp.step()
             vrp_episode_loss += loss.item()
     
@@ -205,5 +216,14 @@ for episode in range(EPISODES):
     print(f"Episode {episode + 1}, c2s_Loss: {0}, vrp_Loss: {vrp_episode_loss}")
     epsilon = max(0.0, epsilon * VRP_EPSILON_DECAY)
     
+
+print('c2s_rew_per_episode:', c2s_rew_per_episode)
+print('D_per_episode:', D_per_episode)
+print('L_per_episode:', L_per_episode)
+print('U_per_episode:', U_per_episode)
+print('vrp_rew_per_episode:', vrp_rew_per_episode)
+print('vehicles_per_episode:', vehicles_per_episode)
+print('customers_per_vehicle_per_episode:', customers_per_vehicle_per_episode)
+
 
 print("Training completed.")
