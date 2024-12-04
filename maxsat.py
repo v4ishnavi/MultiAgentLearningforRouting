@@ -1,7 +1,7 @@
 from z3 import *
 import numpy as np
 
-def optimize_route(customers_R, customers_A, depot, dmax, delta):
+def maxsat(customers_R, customers_A, depot, dmax, delta):
     """
     Optimizes a route given initial sub-tour R and additional customers A.
     """

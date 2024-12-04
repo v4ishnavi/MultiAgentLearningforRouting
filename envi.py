@@ -6,6 +6,11 @@ from torch_geometric.data import Data
 import torch_geometric.utils as utils
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
+from maxsat import maxsat
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.set_default_device(device)
+
 
 class Customer():
     def __init__(self, id, arrival, T=100, SAT=False):
@@ -170,9 +175,9 @@ class Environment():
         #     action = random.randint(1, 6)  # Random action
         # else:
         with torch.no_grad():
-            q_values = self.dqn_c2s(torch.FloatTensor(self.get_c2s_observation()))
+            q_values = self.dqn_c2s(torch.FloatTensor(self.get_c2s_observation()).to(device))
             action = torch.argmax(q_values).item()  # Greedy action
-        return action.numpy()
+        return action   
         
     def get_c2s_observation(self):
         # The state for the c2s agent is the 19 state table in the paper
@@ -340,12 +345,10 @@ class Environment():
             warehouse['vehicles'].append(Vehicle(len(warehouse['vehicles']), warehouse['location'], self.vehicle_cap, self.env_time))
 
         self.cluster_info = [{}, {}, {}, {}]
-
         for c in customer_ids:
             cu = self.state['customers'][c]
             if cu.vehicle_id == -1 and cu.assignment != 4:
                 self.state['customers'][c].arrival = self.env_time
-
 
         for i in range(4):
             clocs = [self.state['customers'][c].location for c in customer_ids if self.state['customers'][c].assignment == i and self.state['customers'][c].cluster == None]
@@ -399,7 +402,6 @@ class Environment():
                     break
             
             clusters.append(new_cluster)
-        
         # neighbourhood radius
         # find cluster diameters
         radii = [np.max([adj[i, j] for i in c for j in c])/2 for c in clusters]
@@ -583,22 +585,46 @@ class Environment():
         if len(self.vrp_actions[i]) == 0:
             return False
         estimated_Qs = []
+        
+        # for v in self.state['warehouses'][i]['vehicles']:
+        #     if v.customers != []:
+        #         print("hiii", v.id)
+        #         # print(v.id, v.customers)
+        #     else:
+        #         print("empty", v.id)
+        import copy
 
         # finding the top k actions
+        temp_state = self.vrp_states[i]
+        temp_vehicles = copy.deepcopy(self.state['warehouses'][i]['vehicles'])
+        temp_customers = copy.deepcopy(self.state['customers'])
+
+
         for action in self.vrp_actions[i]:
             # save state and other details that change during action
             vehicle_id, customer_id = action
-            temp_state = self.vrp_states[i]
-            temp_customer = self.state['customers'][action[1]]
-            temp_vehicle = self.state['warehouses'][i]['vehicles'][vehicle_id]
+            # temp_state = self.vrp_states[i]
+            # temp_customer = self.state['customers'][action[1]]
+            # temp_vehicle = self.state['warehouses'][i]['vehicles'][vehicle_id]
 
             new_state = self.vrp_step(action, i)
-            estimated_Qs.append(self.vrp_l(new_state).cpu().numpy())
+            estimated_Qs.append(self.vrp_l(new_state).cpu().numpy()[0])
 
             # restore the state
             self.vrp_states[i] = temp_state
-            self.state['warehouses'][i]['vehicles'][vehicle_id] = temp_vehicle
-            self.state['customers'][customer_id] = temp_customer
+            # self.state['warehouses'][i]['vehicles'][vehicle_id] = temp_vehicle
+            # self.state['customers'][customer_id] = temp_customer
+            self.state['warehouses'][i]['vehicles'] = temp_vehicles
+            self.state['customers'] = temp_customers
+
+        # for v in self.state['warehouses'][i]['vehicles']:
+        #     if v.customers != []:
+        #         print("hiii2", v.id, len(v.customers), len(self.vrp_actions[i]))
+        #         # print(v.id, v.customers)
+        #     else:
+        #         print("empty2", v.id)
+
+        # print(estimated_Qs)
 
         # pick the top k actions
         if len(estimated_Qs) < self.kappa:
@@ -607,10 +633,11 @@ class Environment():
             paths = [[] for _ in range(len(estimated_Qs))]
         else:
             indices = np.argsort(estimated_Qs)[-self.kappa:]
-            distances = [0 for _ in range(self.kappa)]
-            paths = [[] for _ in range(self.kappa)]
+            distances = [0 for _ in range(len(estimated_Qs))]
+            paths = [[] for _ in range(len(estimated_Qs))]
+
         # compute distances while doing the rollout
-        if random.random() < epsilon:
+        if random.random() < 0: # epsilon:
             if len(estimated_Qs) < self.kappa:
                 index = random.randint(0, len(estimated_Qs) - 1)
             else:
@@ -626,6 +653,7 @@ class Environment():
             # peform complete rollout for each of the top k actions
             for index in indices:
                 paths[index].append(self.vrp_actions[i][index])
+
                 self.vrp_step(self.vrp_actions[i][index], i)
                 new_feasible_actions = self.compute_feasible_actions(i)
 
@@ -638,7 +666,8 @@ class Environment():
                         temp_vehicle = self.state['warehouses'][i]['vehicles'][vehicle_id]
 
                         new_state = self.vrp_step(action, i)
-                        estimated_Qs.append(self.vrp_l(new_state))
+                        estimated_Qs.append(self.vrp_l(new_state).cpu().numpy()[0])
+                        # print(estimated_Qs)
 
                         self.vrp_states[i] = temp_state
                         self.state['warehouses'][i]['vehicles'][vehicle_id] = temp_vehicle
@@ -652,13 +681,20 @@ class Environment():
             self.vrp_states[i] = temp_init_state
             self.state['warehouses'][i]['vehicles'] = temp_vehicles
             self.state['customers'] = temp_customers
-        
+
             # need helper to compute the distance of the path
-            for j in range(self.kappa):
-                distances[j] = self.compute_distance(i, paths[j])
+            # for j in range(self.kappa):
+            #     distances[j] = self.compute_distance(i, paths[j])
             
+            # index = np.argmin(distances)
+            distances = [np.inf for _ in range(len(paths))]
+            for j in range(len(paths)):
+                if paths[j] != []:
+                    distances[j] = self.compute_distance(i, paths[j])
             index = np.argmin(distances)
 
+        # print(self.state['warehouses'][i]['vehicles'][paths[index][0][0]].customers)
+        # print(paths[index][0][1])
 
         # should use optimised_sub_tour 
         # paths[index][0] is the first action i.e. (v_id, c_id) pair
@@ -666,9 +702,9 @@ class Environment():
 
         # use helper to get path in format for forward sat
         # returns a list of tours for each vehicle 
-        
+
         # self.get_optimized_subtour(i, paths[index][0][0])  # forward SAT
-        
+
         # check if this vehicle has any feasible actions left. If not, it leaves the depot and a new one is spawned
         vehicle_fesible = self.compute_feasible_actions(i)
         feasible = False
@@ -726,7 +762,7 @@ class Environment():
         return warehouse_trav
 
 
-    def env_step(self, epsilon_vrp):
+    def env_step(self, epsilon_vrp, epsilon_c2s):
         # execute the c2s agent
         # iterate through the list of unassigned customers and use c2s to decide the assignment
 
@@ -738,7 +774,7 @@ class Environment():
         # delete in beginning 
         for i in range(4):
             self.state['warehouses'][i]['vehicles'] = [] 
-        
+
         for order in self.orders.copy():
             if self.orders == []:
                 break
@@ -746,7 +782,13 @@ class Environment():
             id = order
             if self.state['customers'][order].assignment == -1:
                 if self.c2s == 1:
-                    action = self.c2s_l()
+                    # epsilon greedy action selection
+                    if random.random() < epsilon_c2s:
+                        action = random.randint(0, 4)
+                    else:
+                        action = self.c2s_l()
+                    # if action != 4:
+                        # print("yay")
                 else:
                     action = self.c2s_h()
                 self.c2s_step(action)
@@ -756,13 +798,16 @@ class Environment():
         #     if c.deferred > 0 and c.assignment != 4 and c.ve
 
         # execute the vrp agent
+        # print('test',len([customer.id for customer in self.state['customers'] if (customer.assignment != 4)]))
         customer_list = [customer.id for customer in self.state['customers'] if (customer.vehicle_id == -1 and customer.assignment != 4)]
+        # print(len(customer_list))
         self.vrp_init(customer_list)
         # print([len(self.cluster_info[i]['centroids']) for i in range(4)])
 
         c2s_return = []
         vrp_return = []
         for i in range(4):
+            # print(len([c for c in customer_list if self.state['customers'][c].assignment == i]))
             # print(i, len(customer_list), len(self.state['customers']))
             # iterate while customers are left without vehicle assignment
             if self.vrp == 1:
@@ -782,13 +827,14 @@ class Environment():
                 optimized_tour = self.get_current_tour(i)
 
             # iterate throught the vehicles and delete empty ones
+            # print(optimized_tour)
             for vehicle in self.state['warehouses'][i]['vehicles']:
                 if vehicle.customers == []:
                     self.state['warehouses'][i]['vehicles'].remove(vehicle)
                 else:
                     break
-            
-            
+
+
             # compute reward using optimized_tour
             c2s_reward,Li, Di, Ui = self.compute_c2s_reward(optimized_tour, i)
             for c in c2s_tuples:
@@ -845,7 +891,7 @@ class Environment():
         # print(len(self.orders), len(current_customers))
         for o in self.orders:
             if self.state['customers'][o].assignment != -1:
-                print('Assigned customer', self.state['customers'][o].assignment, self.state['customers'][o].deferred, self.state['customers'][o].arrival, self.state['customers'][o].vehicle_id)
+                # print('Assigned customer', self.state['customers'][o].assignment, self.state['customers'][o].deferred, self.state['customers'][o].arrival, self.state['customers'][o].vehicle_id)
                 break
 
         customer_features = torch.tensor(clocs, dtype=torch.float)
@@ -884,7 +930,7 @@ class Environment():
                 tour[vehicle.id].append(customer)
         return tour
 
-    def get_optimized_subtour(self, i, v_id):
+    def forward_sat(self, i, v_id):
         # find dmax
         c_list = self.state['warehouses'][i]['vehicles'][v_id].customers
         dmax = np.linalg.norm(self.state['warehouses'][i]['location'] - self.state['customers'][c_list[0]].location)
@@ -908,6 +954,7 @@ class Environment():
             return
         
         tour = result[0]
+        # print(tour, type(tour))
 
         # rearrange c accordig to the indexing in tour
         c_list = c_list + added
@@ -939,7 +986,7 @@ class Environment():
         self.state['warehouses'][i]['vehicles'][v_id] = vehicle
 
 
-    def optimise_tour(self, optimised_tour, id): # tightening sat
+    def tightening_sat(self, optimised_tour, id): # tightening sat
         tours = optimised_tour
         
         for vehicle_id, _ in tours.items():
